@@ -1,0 +1,56 @@
+name: JARVIS Telegram connection test
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: jarvis-telegram-connection-test
+  cancel-in-progress: false
+jobs:
+  telegram:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check bot and deliver test message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          JARVIS_OWNER_ID: ${{ secrets.JARVIS_OWNER_ID }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request, urllib.error
+
+          token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+          owner = os.environ.get('JARVIS_OWNER_ID', '').strip()
+          if not re.fullmatch(r'[0-9]+:[A-Za-z0-9_-]+', token):
+              raise SystemExit('TELEGRAM_BOT_TOKEN is missing or malformed.')
+          if not re.fullmatch(r'[1-9][0-9]*', owner):
+              raise SystemExit('JARVIS_OWNER_ID must be a positive numeric user ID.')
+
+          def call(method, payload):
+              req = urllib.request.Request(
+                  'https://api.telegram.org/bot' + token + '/' + method,
+                  data=json.dumps(payload).encode(),
+                  headers={'Content-Type': 'application/json'}, method='POST')
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      data = json.load(response)
+              except urllib.error.HTTPError as exc:
+                  raise SystemExit(f'{method}: Telegram HTTP {exc.code}. Check token, owner ID and /start.') from None
+              except Exception:
+                  raise SystemExit(f'{method}: network or response error.') from None
+              if not data.get('ok'):
+                  raise SystemExit(f'{method}: Telegram API rejected the request.')
+              return data['result']
+
+          bot = call('getMe', {})
+          if not bot.get('is_bot'):
+              raise SystemExit('getMe did not identify a bot.')
+          print('PASS: bot token accepted')
+          chat = call('getChat', {'chat_id': int(owner)})
+          if chat.get('type') != 'private' or chat.get('id') != int(owner):
+              raise SystemExit('Owner chat is not the expected private chat.')
+          print('PASS: private owner chat found')
+          result = call('sendMessage', {'chat_id': int(owner), 'text': 'JARVIS: соединение с Telegram установлено. Это тест GitHub Actions; интеллект пока не запущен.'})
+          if result.get('chat', {}).get('id') != int(owner):
+              raise SystemExit('Unexpected message destination.')
+          print('PASS: test message delivered to owner chat')
+          PY
