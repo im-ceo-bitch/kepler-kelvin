@@ -113,3 +113,18 @@
 | 7 QA | NOT STARTED | 72h soak, security, restore, owner acceptance |
 
 Next action: validate exact snapshot + backup before implementing block 2. Do not launch new production code from the audit archive.
+
+## Статус блока 2 (27.11.2026)
+Реализация-кандидат подготовлена; локальные тесты пройдены, реальные acceptance gates открыты. См. BLOCK-02-IMPLEMENTATION.md. Блок 3 не начат.
+
+## Статус накопительного выпуска 02–03 (27.11.2026)
+См. BLOCK-03-IMPLEMENTATION.md. Локальная реализация и регрессии блоков 02–03 завершены в пределах описанного scope; остатки (нативная семантическая память, verified page diff, human review, croniter environment, live integration и target resource metrics) остаются открытыми gates. Блоки 04–07 не начаты. Не считать production-ready.
+
+## Статус накопительного выпуска 02–04 (27.11.2026)
+Блок 04: реализация-кандидат, локальные регрессии 127 Python / 245 backend PASS. См. BLOCK-04-IMPLEMENTATION.md и evidence/block04-*.log. Реальный D1, модельные стратегические сценарии, производительность Mac и production gates открыты. Блоки 05–07 не начаты. Промежуточная установка не требуется для следующего локального этапа.
+
+## Статус накопительного выпуска 02–05 (27.11.2026)
+Блок 05: реализация-кандидат. 137 Python / 260 backend PASS (локальные тесты). Канонический Telegram Care, ручной перехват и уведомления. Полный живой диалог RU/UZ, реальная интеграция и критерии приёмки открыты; Meta отключены. См. BLOCK-05-IMPLEMENTATION.md. Блоки 06–07 не начаты; промежуточная установка не требуется.
+
+### Block 06 implementation update
+See `BLOCK-06-IMPLEMENTATION.md`. Turn-based foreground conversation, shared exact-turn lookup and local playback/recognition are implemented in the patch. The acceptance gate is open (real-device build, 40 real RU/UZ recordings, latency, interruption and quality). Full token streaming/full-duplex are not implemented; no production deployment. Block 07 not started.

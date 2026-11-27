@@ -1,0 +1,223 @@
+{
+  "recognition": {
+    "ru": {
+      "expected": 20,
+      "measured": 0,
+      "wer": null,
+      "p50Seconds": null,
+      "complete": false
+    },
+    "uz": {
+      "expected": 20,
+      "measured": 0,
+      "wer": null,
+      "p50Seconds": null,
+      "complete": false
+    }
+  },
+  "cases": [
+    {
+      "id": "ru-01",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-02",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-03",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-04",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-05",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-06",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-07",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-08",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-09",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-10",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-11",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-12",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-13",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-14",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-15",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-16",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-17",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-18",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-19",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "ru-20",
+      "language": "ru",
+      "status": "missing"
+    },
+    {
+      "id": "uz-01",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-02",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-03",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-04",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-05",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-06",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-07",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-08",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-09",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-10",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-11",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-12",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-13",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-14",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-15",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-16",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-17",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-18",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-19",
+      "language": "uz",
+      "status": "missing"
+    },
+    {
+      "id": "uz-20",
+      "language": "uz",
+      "status": "missing"
+    }
+  ],
+  "tts": {},
+  "note": "Human voice quality and audio latency on iPhone need a separate real-device test. Missing files are not passes.",
+  "peakChildRSSBytes": 0
+}

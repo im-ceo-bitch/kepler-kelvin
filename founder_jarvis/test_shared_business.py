@@ -26,7 +26,7 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             def daily(self,*a):pass
             def call(self,action,data=None):
                 calls.append(action)
-                if action=='claim':return {'job':{'id':'test-id','source':'telegram','voice':True,'lease':'test','prompt':'Привет'},'history':[],'memory':[],'snapshot':{}}
+                if action=='claim':return {'job':{'id':'test-id','source':'telegram','voice':True,'lease':'test','prompt':'Привет'},'history':[],'memory':[],'typedMemory':[],'snapshot':{}}
                 if action=='finish':self.data=data
                 return {'ok':True}
         fake=Fake()

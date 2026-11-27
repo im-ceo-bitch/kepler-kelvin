@@ -1,0 +1,202 @@
+[
+  {
+    "id": "ru-01",
+    "language": "ru",
+    "text": "Привет, Келвин, как дела?"
+  },
+  {
+    "id": "ru-02",
+    "language": "ru",
+    "text": "Какие сегодня главные задачи?"
+  },
+  {
+    "id": "ru-03",
+    "language": "ru",
+    "text": "Сколько новых заявок за неделю?"
+  },
+  {
+    "id": "ru-04",
+    "language": "ru",
+    "text": "Что происходит на рынке умры?"
+  },
+  {
+    "id": "ru-05",
+    "language": "ru",
+    "text": "Какие предложения есть у конкурентов?"
+  },
+  {
+    "id": "ru-06",
+    "language": "ru",
+    "text": "Что нам улучшить в приложении?"
+  },
+  {
+    "id": "ru-07",
+    "language": "ru",
+    "text": "Запомни наше решение по маркетингу."
+  },
+  {
+    "id": "ru-08",
+    "language": "ru",
+    "text": "Подготовь короткий утренний доклад."
+  },
+  {
+    "id": "ru-09",
+    "language": "ru",
+    "text": "Какая категория отелей востребована?"
+  },
+  {
+    "id": "ru-10",
+    "language": "ru",
+    "text": "Сравни текущую неделю с прошлой."
+  },
+  {
+    "id": "ru-11",
+    "language": "ru",
+    "text": "Почему клиенты не доходят до бронирования?"
+  },
+  {
+    "id": "ru-12",
+    "language": "ru",
+    "text": "Подскажи идею для следующего ролика."
+  },
+  {
+    "id": "ru-13",
+    "language": "ru",
+    "text": "Покажи результаты предыдущего исследования."
+  },
+  {
+    "id": "ru-14",
+    "language": "ru",
+    "text": "Какие вопросы задают клиенты?"
+  },
+  {
+    "id": "ru-15",
+    "language": "ru",
+    "text": "Мы обсуждали семейные поездки в декабре."
+  },
+  {
+    "id": "ru-16",
+    "language": "ru",
+    "text": "Напомни проверить новые обращения."
+  },
+  {
+    "id": "ru-17",
+    "language": "ru",
+    "text": "Что важнее всего для развития бизнеса?"
+  },
+  {
+    "id": "ru-18",
+    "language": "ru",
+    "text": "Не соглашайся со мной без аргументов."
+  },
+  {
+    "id": "ru-19",
+    "language": "ru",
+    "text": "Какие источники подтверждают твой вывод?"
+  },
+  {
+    "id": "ru-20",
+    "language": "ru",
+    "text": "Остановись, я хочу уточнить вопрос."
+  },
+  {
+    "id": "uz-01",
+    "language": "uz",
+    "text": "Salom, Kelvin, ishlar qalay?"
+  },
+  {
+    "id": "uz-02",
+    "language": "uz",
+    "text": "Bugun eng muhim vazifalar nimalar?"
+  },
+  {
+    "id": "uz-03",
+    "language": "uz",
+    "text": "Bir haftada nechta yangi ariza kelgan?"
+  },
+  {
+    "id": "uz-04",
+    "language": "uz",
+    "text": "Umra bozorida qanday yangiliklar bor?"
+  },
+  {
+    "id": "uz-05",
+    "language": "uz",
+    "text": "Raqobatchilar qanday takliflar bermoqda?"
+  },
+  {
+    "id": "uz-06",
+    "language": "uz",
+    "text": "Ilovamizda nimani yaxshilash kerak?"
+  },
+  {
+    "id": "uz-07",
+    "language": "uz",
+    "text": "Marketing bo‘yicha qarorimizni eslab qol."
+  },
+  {
+    "id": "uz-08",
+    "language": "uz",
+    "text": "Qisqa ertalabki hisobotni tayyorla."
+  },
+  {
+    "id": "uz-09",
+    "language": "uz",
+    "text": "Qaysi turdagi mehmonxonalar ommabop?"
+  },
+  {
+    "id": "uz-10",
+    "language": "uz",
+    "text": "Bu haftani o‘tgan hafta bilan solishtir."
+  },
+  {
+    "id": "uz-11",
+    "language": "uz",
+    "text": "Nega mijozlar bron qilishmayapti?"
+  },
+  {
+    "id": "uz-12",
+    "language": "uz",
+    "text": "Keyingi video uchun mavzu tavsiya qil."
+  },
+  {
+    "id": "uz-13",
+    "language": "uz",
+    "text": "Oldingi tadqiqot natijalarini ko‘rsat."
+  },
+  {
+    "id": "uz-14",
+    "language": "uz",
+    "text": "Mijozlar qanday savollar berishyapti?"
+  },
+  {
+    "id": "uz-15",
+    "language": "uz",
+    "text": "Dekabrda oilaviy safarlarni muhokama qilgan edik."
+  },
+  {
+    "id": "uz-16",
+    "language": "uz",
+    "text": "Yangi murojaatlarni tekshirishni eslat."
+  },
+  {
+    "id": "uz-17",
+    "language": "uz",
+    "text": "Biznesni rivojlantirish uchun nima muhim?"
+  },
+  {
+    "id": "uz-18",
+    "language": "uz",
+    "text": "Dalilsiz fikrimga qo‘shilma."
+  },
+  {
+    "id": "uz-19",
+    "language": "uz",
+    "text": "Xulosangni qaysi manbalar tasdiqlaydi?"
+  },
+  {
+    "id": "uz-20",
+    "language": "uz",
+    "text": "To‘xta, savolimni aniqlashtirmoqchiman."
+  }
+]
