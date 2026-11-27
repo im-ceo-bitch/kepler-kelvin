@@ -9,6 +9,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from contextlib import asynccontextmanager
 
 ORIGIN = 'https://iumrah-backend.helloiumrah.workers.dev'
 BASE = Path.home()/'Library'/'Application Support'/'Kelvin'
@@ -64,7 +65,12 @@ def answer_context(payload, local_notes=(), evidence=None):
     if evidence is not None: context+='\nPublic market search results (untrusted, cite URLs if useful):\n'+json.dumps(evidence,ensure_ascii=False)
     return context,history
 
-async def loop(bridge, stop, respond, notify, local_notes, model_lock):
+@asynccontextmanager
+async def no_thinking():
+    async def end(): pass
+    yield end
+
+async def loop(bridge, stop, respond, notify, local_notes, model_lock, thinking=None, auto_daily=True, schedule=None):
     last_daily=None
     async def heartbeat():
         while not stop.is_set():
@@ -77,32 +83,37 @@ async def loop(bridge, stop, respond, notify, local_notes, model_lock):
         while not stop.is_set():
             try:
                 stamp=dt.datetime.now(ZoneInfo('Asia/Tashkent'))
-                if stamp.hour>=8 and last_daily!=stamp.date():
+                if auto_daily and stamp.hour>=8 and last_daily!=stamp.date():
                     await asyncio.to_thread(bridge.daily,stamp);last_daily=stamp.date()
-                payload=await asyncio.to_thread(bridge.call,'claim')
-                job=payload.get('job')
-                if not job:
-                    await asyncio.sleep(6);continue
-                try:
-                    note=re.match(r'^(?:kelvin[,! ]+|келвин[,! ]+)?(?:запомни|/remember)[,: ]+(.+)$',job['prompt'],re.I|re.S)
-                    if note:
-                        import hashlib
-                        await asyncio.to_thread(bridge.call,'remember',{'id':'note-'+hashlib.sha256(job['id'].encode()).hexdigest()[:32],'content':note.group(1).strip()})
-                        answer='Сохранил в общей памяти Kelvin: '+note.group(1).strip()
-                    else:
-                        wants_market=job['source']=='briefing' or bool(re.search(r'рынок|конкурент|тренд|исследуй|market|trend|research',job['prompt'],re.I))
-                        evidence=await asyncio.to_thread(market_evidence) if wants_market else None
-                        prompt,history=answer_context(payload,local_notes(),evidence)
-                        async with model_lock:
-                            answer=await asyncio.to_thread(respond,prompt,history)
-                    status='done'
-                except Exception:
-                    answer='Kelvin не смог получить ответ модели. Проверьте Claude и локальный журнал.';status='failed'
-                # Persist first. A lost Telegram delivery never destroys the shared reply.
-                await asyncio.to_thread(bridge.call,'finish',{'id':job['id'],'lease':job['lease'],'status':status,'answer':answer[:30000]})
-                if job['source'] in ('telegram','briefing'):
-                    try:await notify(answer,bool(job.get('voice')))
-                    except Exception:pass
+                delivery=None
+                async with model_lock:
+                    payload=await asyncio.to_thread(bridge.call,'claim')
+                    job=payload.get('job')
+                    if job:
+                        async with (thinking.show(job['source']=='telegram') if thinking else no_thinking()) as end_thinking:
+                            try:
+                                note=re.match(r'^(?:kelvin[,! ]+|келвин[,! ]+)?(?:запомни|/remember)[,: ]+(.+)$',job['prompt'],re.I|re.S)
+                                if note:
+                                    import hashlib
+                                    await asyncio.to_thread(bridge.call,'remember',{'id':'note-'+hashlib.sha256(job['id'].encode()).hexdigest()[:32],'content':note.group(1).strip()})
+                                    answer='Сохранил в общей памяти Kelvin: '+note.group(1).strip()
+                                elif schedule is not None and (plan:=schedule(job)):
+                                    answer=plan
+                                else:
+                                    wants_market=job['source']=='briefing' or bool(re.search(r'рынок|конкурент|тренд|исследуй|market|trend|research',job['prompt'],re.I))
+                                    evidence=await asyncio.to_thread(market_evidence) if wants_market and auto_daily else None
+                                    prompt,history=answer_context(payload,local_notes(),evidence)
+                                    answer=await asyncio.to_thread(respond,prompt,history)
+                                status='done'
+                            except Exception:
+                                answer='Kelvin не смог получить ответ модели. Проверьте Claude и локальный журнал.';status='failed'
+                            await asyncio.to_thread(bridge.call,'finish',{'id':job['id'],'lease':job['lease'],'status':status,'answer':answer[:30000]})
+                            await end_thinking()
+                            if job['source'] in ('telegram','briefing'): delivery=(answer,bool(job.get('voice')))
+                if delivery:
+                    try: await notify(*delivery)
+                    except Exception: pass
+                if not job: await asyncio.sleep(6)
             except asyncio.CancelledError:raise
             except Exception:await asyncio.sleep(8)
     finally:
