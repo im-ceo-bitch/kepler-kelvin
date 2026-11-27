@@ -1,0 +1,133 @@
+name: Unpack JARVIS update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'jarvis-update-*.zip'
+      - 'jarvis-update-*.zip.001'
+      - 'jarvis-update-*.zip.002'
+      - 'jarvis-repository-bootstrap.zip'
+      - 'jarvis-repository-bootstrap.zip.001'
+      - 'jarvis-repository-bootstrap.zip.002'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jarvis-unpack-main
+  cancel-in-progress: false
+
+jobs:
+  unpack:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate and apply recognized updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          script=$(mktemp)
+          trap 'rm -f "$script"' EXIT
+          cat > "$script" <<'PY'
+          import hashlib, os, re, shutil, stat, tempfile, zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path.cwd().resolve()
+          pattern = re.compile(r'(?:jarvis-repository-bootstrap|jarvis-update-[A-Za-z0-9][A-Za-z0-9._-]*)\.zip(?:\.(001|002))?\Z')
+          groups = {}
+          for p in root.iterdir():
+              m = pattern.fullmatch(p.name)
+              if m:
+                  if p.is_symlink() or not p.is_file():
+                      raise SystemExit(f'Unsafe input: {p.name}')
+                  part = m.group(1)
+                  base = p.name[:-4] if part else p.name
+                  groups.setdefault(base, {})[part or 'full'] = p
+
+          # Bootstrap first, then updates in filename order.
+          for base, files in sorted(groups.items(), key=lambda x: (x[0] != 'jarvis-repository-bootstrap.zip', x[0])):
+              if 'full' in files and len(files) != 1:
+                  raise SystemExit(f'Conflicting complete and split archive: {base}')
+              if 'full' not in files and set(files) != {'001', '002'}:
+                  print(f'Waiting for both parts of {base}; leaving existing part untouched.')
+                  continue
+              with tempfile.TemporaryDirectory(prefix='jarvis-unpack-') as tmp:
+                  archive = Path(tmp) / 'update.zip'
+                  with archive.open('wb') as out:
+                      for key in (['full'] if 'full' in files else ['001', '002']):
+                          with files[key].open('rb') as src:
+                              shutil.copyfileobj(src, out)
+                  if base == 'jarvis-repository-bootstrap.zip':
+                      with archive.open('rb') as src:
+                          digest = hashlib.file_digest(src, 'sha256').hexdigest()
+                      if digest != 'bc9e8386035a893cab5fdefb28ddb58e862638702bdc7f9739f10ef57881a63a':
+                          raise SystemExit('Bootstrap SHA-256 mismatch.')
+                  with zipfile.ZipFile(archive) as z:
+                      entries = z.infolist()
+                      if sum(i.file_size for i in entries) > 1024**3:
+                          raise SystemExit('Expanded archive exceeds 1 GiB.')
+                      bad = z.testzip()
+                      if bad:
+                          raise SystemExit(f'CRC failure: {bad}')
+                      plan, seen = [], set()
+                      for i in entries:
+                          p = PurePosixPath(i.filename)
+                          parts = tuple(x.casefold() for x in p.parts)
+                          if (not parts or p.is_absolute() or '..' in parts or '\\' in i.filename
+                              or any(x == '.git' for x in parts) or ':' in p.parts[0]
+                              or stat.S_ISLNK(i.external_attr >> 16)):
+                              raise SystemExit(f'Unsafe ZIP entry: {i.filename}')
+                          if parts[:2] == ('.github', 'workflows') or parts == ('.github',):
+                              print(f'Protected: {i.filename}')
+                              continue
+                          if any(x == '.env' or (x.startswith('.env.') and x not in ('.env.example', '.env.sample', '.env.template')) for x in parts):
+                              raise SystemExit(f'Potential secret file: {i.filename}')
+                          if len(parts) == 1 and pattern.fullmatch(p.name):
+                              raise SystemExit(f'Cannot overwrite archive input: {i.filename}')
+                          target = root.joinpath(*p.parts)
+                          if target in seen or not target.resolve().is_relative_to(root):
+                              raise SystemExit(f'Duplicate or unsafe target: {i.filename}')
+                          if any(q.is_symlink() for q in (target, *target.parents) if q != root):
+                              raise SystemExit(f'Symlink in destination: {i.filename}')
+                          if not i.is_dir() and i.file_size > 100 * 1024**2:
+                              raise SystemExit(f'File exceeds GitHub limit: {i.filename}')
+                          seen.add(target)
+                          plan.append((i, target))
+                      for i, target in plan:
+                          if i.is_dir():
+                              target.mkdir(parents=True, exist_ok=True)
+                          else:
+                              target.parent.mkdir(parents=True, exist_ok=True)
+                              with z.open(i) as src, target.open('wb') as dst:
+                                  shutil.copyfileobj(src, dst)
+                              target.chmod(0o755 if (i.external_attr >> 16) & 0o111 else 0o644)
+                  for p in files.values():
+                      p.unlink()
+                  print(f'Applied {base}: {len(plan)} entries; input archive removed.')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fdx
+            python3 "$script"
+            git add -A
+            if git diff --cached --quiet; then
+              echo 'No complete recognized updates to apply.'
+              exit 0
+            fi
+            git commit -m 'Apply JARVIS ZIP updates and remove archives'
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt); retrying from latest main."
+          done
+          echo 'Could not push. Check write permissions and branch protection.' >&2
+          exit 1
