@@ -1,1 +1,106 @@
+name: Unpack ZIP update
 
+on:
+  workflow_dispatch:
+    inputs:
+      archive:
+        description: 'ZIP filename in repository root (empty = autodetect)'
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths: ['*.zip']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unpack-zip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  unpack:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate and unpack ZIP
+        env:
+          REQUESTED_ARCHIVE: ${{ inputs.archive }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, shutil, stat, zipfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path.cwd().resolve()
+          requested = os.environ.get('REQUESTED_ARCHIVE', '').strip()
+          if requested:
+              if Path(requested).name != requested or not requested.endswith('.zip'):
+                  raise SystemExit('Use a ZIP filename in the repository root.')
+              archives = [root / requested]
+          else:
+              archives = sorted(root.glob('*.zip'))
+          if len(archives) != 1:
+              raise SystemExit(f'Expected one ZIP, found {len(archives)}. Specify the filename manually.')
+          archive = archives[0]
+          if not archive.is_file() or archive.is_symlink():
+              raise SystemExit('ZIP missing or unsafe.')
+          with zipfile.ZipFile(archive) as z:
+              entries = z.infolist()
+              if sum(i.file_size for i in entries) > 1024**3:
+                  raise SystemExit('Archive exceeds 1 GiB expanded limit.')
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit(f'CRC failure: {bad}')
+              plan, skipped, seen = [], [], set()
+              for i in entries:
+                  p = PurePosixPath(i.filename)
+                  if (not p.parts or p.is_absolute() or '..' in p.parts or '\\' in i.filename
+                      or any(x.casefold() == '.git' for x in p.parts)
+                      or ':' in p.parts[0] or stat.S_ISLNK(i.external_attr >> 16)):
+                      raise SystemExit(f'Unsafe entry: {i.filename}')
+                  if p.parts[:2] == ('.github', 'workflows'):
+                      skipped.append(i.filename)
+                      continue
+                  if p.name == '.env' or (p.name.startswith('.env.') and p.name not in ('.env.example', '.env.sample', '.env.template')):
+                      raise SystemExit(f'Potential secret file: {i.filename}')
+                  target = root.joinpath(*p.parts)
+                  if target == archive or target in seen:
+                      raise SystemExit(f'Duplicate or archive overwrite: {i.filename}')
+                  if any(q.is_symlink() for q in [target, *target.parents] if q != root):
+                      raise SystemExit(f'Symlink in destination: {i.filename}')
+                  if not target.resolve().is_relative_to(root):
+                      raise SystemExit(f'Unsafe destination: {i.filename}')
+                  if not i.is_dir() and i.file_size >= 100 * 1024**2:
+                      raise SystemExit(f'File exceeds GitHub limit: {i.filename}')
+                  seen.add(target)
+                  plan.append((i, target))
+              for i, target in plan:
+                  if i.is_dir():
+                      target.mkdir(parents=True, exist_ok=True)
+                  else:
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with z.open(i) as src, target.open('wb') as dst:
+                          shutil.copyfileobj(src, dst)
+                      if (i.external_attr >> 16) & 0o111:
+                          target.chmod(0o755)
+                      else:
+                          target.chmod(0o644)
+              print(f'Unpacked {len(plan)} entries. Preserved workflow files: {skipped}')
+          archive.unlink()
+          PY
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Apply ZIP update'
+          git push origin HEAD:main
