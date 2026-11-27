@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from founder_jarvis import integrations as tools, natural, business
+from founder_jarvis import integrations as tools, natural, business, shared_business
 from pathlib import Path
 
 log = logging.getLogger('kelvin')
@@ -216,7 +216,8 @@ def main():
     cfg=home/'agent.toml'; config_file(cfg,workspace)
     core_home=home/'core'; core_home.mkdir(exist_ok=True)
     store=Store(home/'jobs.sqlite3'); voice=Voice(os.getenv('JARVIS_LANGUAGE','ru'))
-    stop=asyncio.Event(); worker_task=None; voice_lock=asyncio.Lock()
+    stop=asyncio.Event(); worker_task=None; shared_task=None; voice_lock=asyncio.Lock(); model_lock=asyncio.Lock()
+    bridge=shared_business.Bridge.load()
     biz=business.Service(token,owner)
     async def send(bot, chat, text, want_voice=False):
         text=tools.redact(text)
@@ -233,56 +234,69 @@ def main():
             if not row:
                 await asyncio.sleep(0.5); continue
             ident,chat=row['id'],row['chat']
-            try:
-                if row['mode']!='chat':
-                    try: await app.bot.send_message(chat,f'Задача #{ident}: выполняю.')
-                    except Exception: pass
-                history=store.history(chat,chat_only=True)
-                if row['mode']=='chat':
-                    notes=[r['text'][:700] for r in store.memories(chat)[:20]]
-                    if notes: history.insert(0,{'owner_notes_data':notes})
-                mode,arg=row['mode'],row['prompt']
-                if mode=='chat' and engine=='claude':
-                    mode,arg,approval=await asyncio.to_thread(natural.plan,arg,history,workspace,execute_claude)
-                    if approval:
-                        with store.db: store.db.execute("UPDATE jobs SET mode=?,prompt=?,state='pending' WHERE id=? AND state='running'",(mode,arg,ident))
-                        await send(app.bot,chat,f'Подтверди действие #{ident}: /{mode} {arg}\n/approve {ident} или /cancel {ident}')
-                        continue
-                    if mode=='chat': answer=arg
-                    elif mode=='projects': answer='\n'.join(tools.load(tools.PROJECTS)) or 'Проекты не зарегистрированы. См. KELVIN-V5.md.'
-                    elif mode=='biz': answer=await asyncio.to_thread(biz.owner_command,arg)
-                    elif mode=='schedule':
-                        mins,request=arg.split(maxsplit=1)
-                        new_id,_=store.add(chat,request,'chat',bool(row['voice']),None,due=time.time()+60*int(mins))
-                        answer=f'Запланировано поручение #{new_id} через {mins} мин.'
+            async with model_lock:
+                try:
+                    if row['mode']!='chat':
+                        try: await app.bot.send_message(chat,f'Задача #{ident}: выполняю.')
+                        except Exception: pass
+                    history=store.history(chat,chat_only=True)
+                    if row['mode']=='chat':
+                        notes=[r['text'][:700] for r in store.memories(chat)[:20]]
+                        if notes: history.insert(0,{'owner_notes_data':notes})
+                    mode,arg=row['mode'],row['prompt']
+                    if mode=='chat' and engine=='claude':
+                        mode,arg,approval=await asyncio.to_thread(natural.plan,arg,history,workspace,execute_claude)
+                        if approval:
+                            with store.db: store.db.execute("UPDATE jobs SET mode=?,prompt=?,state='pending' WHERE id=? AND state='running'",(mode,arg,ident))
+                            await send(app.bot,chat,f'Подтверди действие #{ident}: /{mode} {arg}\n/approve {ident} или /cancel {ident}')
+                            continue
+                        if mode=='chat': answer=arg
+                        elif mode=='projects': answer='\n'.join(tools.load(tools.PROJECTS)) or 'Проекты не зарегистрированы. См. KELVIN-V5.md.'
+                        elif mode=='biz': answer=await asyncio.to_thread(biz.owner_command,arg)
+                        elif mode=='schedule':
+                            mins,request=arg.split(maxsplit=1)
+                            new_id,_=store.add(chat,request,'chat',bool(row['voice']),None,due=time.time()+60*int(mins))
+                            answer=f'Запланировано поручение #{new_id} через {mins} мин.'
+                        else: answer=await asyncio.to_thread(execute_agent,engine,model,mode,arg,history,workspace,cfg,core_home)
                     else: answer=await asyncio.to_thread(execute_agent,engine,model,mode,arg,history,workspace,cfg,core_home)
-                else: answer=await asyncio.to_thread(execute_agent,engine,model,mode,arg,history,workspace,cfg,core_home)
-                answer=tools.redact(answer)
-                store.finish(ident,'done',answer)
-            except Exception as exc:
-                answer=str(exc) if isinstance(exc,RuntimeError) else 'Ошибка выполнения. Проверьте локальный runtime.'
-                store.finish(ident,'failed',answer)
+                    answer=tools.redact(answer)
+                    store.finish(ident,'done',answer)
+                except Exception as exc:
+                    answer=str(exc) if isinstance(exc,RuntimeError) else 'Ошибка выполнения. Проверьте локальный runtime.'
+                    store.finish(ident,'failed',answer)
             if row['mode']=='chat': answer=re.sub(r'\*\*([^*]+)\*\*',r'\1',answer)
             try: await send(app.bot,chat,answer if row['mode']=='chat' else f'#{ident}\n{answer}',bool(row['voice']))
             except Exception: pass # persisted; /result retrieves it
     async def init(app):
-        nonlocal worker_task
+        nonlocal worker_task,shared_task
         await app.bot.set_my_commands([BotCommand(n,d) for n,d in [('start','Все команды'),('biz','Клиентские обращения'),('health','Диагностика'),('diagnose','Тест голоса'),('voice','Голосовой ответ'),('remember','Запомнить'),('memory','Память'),('forget','Удалить заметку'),('projects','Проекты'),('research','Поиск в интернете'),('work','Разработка'),('review','Анализ проекта'),('check','Тесты'),('mac','Управление Mac'),('gh','GitHub'),('cf','Cloudflare'),('ig','Instagram'),('schedule','Отложенное поручение'),('tasks','Задачи'),('result','Результат'),('approve','Подтвердить'),('cancel','Отмена'),('local','Резервный OpenJarvis'),('edit','Правка workspace'),('gitstatus','Git workspace')]])
         worker_task=asyncio.create_task(worker(app))
         biz.start()
+        if bridge:
+            def respond(prompt,history):
+                return tools.redact(execute_claude(prompt,history,workspace,shared_business.SYSTEM))
+            async def notify(answer,want_voice):
+                await send(app.bot,owner,answer,want_voice)
+            shared_task=asyncio.create_task(shared_business.loop(bridge,stop,respond,notify,lambda:[r['text'] for r in store.memories(owner)],model_lock))
         try:
-            await app.bot.send_message(owner,'Kelvin V5 на связи. /start — инструменты; /health — диагностика.')
+            await app.bot.send_message(owner,'Kelvin Business Sync на связи. /start — инструменты; /health — диагностика.')
         except Exception as exc:
             log.warning('Startup notification failed: %s',type(exc).__name__)
     async def shutdown(app):
         stop.set()
         biz.stop()
+        if shared_task: shared_task.cancel(); await asyncio.gather(shared_task,return_exceptions=True)
         if worker_task: await worker_task
     async def start(u,c):
         if authorized(u,owner): await send(c.bot,owner,'Kelvin V5. Обычная речь — диалог и действия. /biz — клиентские обращения.\n'+tools.HELP)
     async def enqueue(u,c,mode='chat',prompt=None,want_voice=False,approval=False,due=0):
         if not authorized(u,owner): return
         if not prompt or not prompt.strip() or len(prompt)>12000: await u.message.reply_text('Пустой или слишком длинный запрос.'); return
+        if bridge and mode=='chat' and not approval and not due:
+            try:
+                await asyncio.to_thread(bridge.enqueue,f'tg-{owner}-{u.message.message_id}',tools.redact(prompt.strip()),want_voice)
+            except RuntimeError as exc: await u.message.reply_text(str(exc)+'; запрос не отправлен в общую историю. Повторите позже.')
+            return
         ident,fresh=store.add(owner,prompt.strip(),mode,want_voice,u.message.message_id,approval,due)
         if fresh and (approval or mode!='chat' or due):
             await u.message.reply_text(f'#{ident}: '+(f'ожидает /approve {ident}\n{mode}: {prompt[:1000]}' if approval or mode=='edit' else 'запланировано' if due else 'в очереди'))
@@ -293,11 +307,26 @@ def main():
         text=' '.join(c.args).strip()
         if not text or len(text)>2000: await u.message.reply_text('/remember текст (до 2000 символов)'); return
         if tools.redact(text)!=text: await u.message.reply_text('Не сохраняйте токены в памяти.'); return
+        if bridge:
+            ident=f'note-{owner}-{u.message.message_id}'
+            try: await asyncio.to_thread(bridge.call,'remember',{'id':ident,'content':text});await u.message.reply_text(f'Общая заметка {ident} сохранена.')
+            except RuntimeError as exc: await u.message.reply_text(str(exc))
+            return
         ident=store.remember(owner,text); await u.message.reply_text(f'Заметка #{ident} сохранена локально.')
     async def memory(u,c):
-        if authorized(u,owner): await send(c.bot,owner,'\n'.join(f"#{r['id']} {r['text']}" for r in store.memories(owner)) or 'Нет заметок.')
+        if not authorized(u,owner): return
+        lines=[f"#{r['id']} {r['text']}" for r in store.memories(owner)]
+        if bridge:
+            try:
+                shared=await asyncio.to_thread(bridge.call,'memory'); lines += [f"{r['id']} {r['content']}" for r in shared['notes']]
+            except RuntimeError as exc: lines.append(str(exc))
+        await send(c.bot,owner,'\n'.join(lines) or 'Нет заметок.')
     async def forget(u,c):
         if not authorized(u,owner): return
+        if bridge and len(c.args)==1 and c.args[0].startswith('note-'):
+            try: await asyncio.to_thread(bridge.call,'forget',{'id':c.args[0]});await u.message.reply_text('Общая заметка удалена; история сообщений сохранена.')
+            except RuntimeError as exc: await u.message.reply_text(str(exc))
+            return
         if len(c.args)!=1 or not c.args[0].isdigit(): await u.message.reply_text('/forget ID'); return
         await u.message.reply_text('Заметка удалена (история поручений не затронута).' if store.forget(owner,int(c.args[0])) else 'Заметка не найдена.')
     async def diagnose(u,c):
@@ -377,7 +406,8 @@ def main():
         status=await asyncio.to_thread(local_model_status,model) if engine=='ollama' else ('CLI найден; проверяется реальным запросом' if Path(os.getenv('KELVIN_CLAUDE_BIN','/nonexistent')).is_file() else 'CLI не найден')
         core=os.getenv('KELVIN_AGENT_PYTHON',sys.executable)
         speech=os.getenv('KELVIN_SPEECH_PYTHON')
-        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin macOS v5\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
+        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin Business Sync\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
+        await u.message.reply_text('Общая история iumrah: '+('ключ установлен; проверяется backend' if bridge else 'не подключена'))
         await send(c.bot,owner,tools.integration_status()+'\n'+biz.status()+'\nЗаметки: '+str(len(store.memories(owner)))+'\nОшибки: '+str(counts.get('failed',0)))
     async def gitstatus(u,c):
         if not authorized(u,owner): return

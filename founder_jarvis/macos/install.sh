@@ -14,7 +14,7 @@ stage 'Preparing Telegram environment'
 uv venv --allow-existing --python 3.11 "$BASE/telegram-venv"
 PY="$BASE/telegram-venv/bin/python"
 uv pip install --python "$PY" 'python-telegram-bot==22.8' 'python-dotenv>=1,<2'
-"$PY" -m unittest founder_jarvis.test_runtime founder_jarvis.test_macos founder_jarvis.test_recovery founder_jarvis.test_claude founder_jarvis.test_v4 founder_jarvis.test_v5 -v
+"$PY" -m unittest founder_jarvis.test_runtime founder_jarvis.test_macos founder_jarvis.test_recovery founder_jarvis.test_claude founder_jarvis.test_v4 founder_jarvis.test_v5 founder_jarvis.test_shared_business -v
 "$PY" founder_jarvis/macos/service.py config "$PY"
 stage 'Starting Telegram service with Claude Code'
 "$PY" founder_jarvis/macos/service.py runtime "$PY"
