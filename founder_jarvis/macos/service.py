@@ -1,6 +1,6 @@
 """Generate owner-only local configuration and LaunchAgents; no secrets in plists."""
 from pathlib import Path
-import getpass, os, plistlib, re, sys, shutil, subprocess
+import getpass, os, plistlib, re, sys, shutil, subprocess, time
 ROOT=Path(__file__).resolve().parents[2]
 BASE=Path.home()/'Library'/'Application Support'/'Kelvin'
 LABEL='com.kelvin.manager'
@@ -45,13 +45,34 @@ def main():
     if mode=='ollama':
         label=OLLAMA; args=['/bin/bash',ROOT/'founder_jarvis/macos/ollama-service.sh',executable]; env={'OLLAMA_HOST':'127.0.0.1:11434','OLLAMA_NUM_PARALLEL':'1','OLLAMA_MAX_LOADED_MODELS':'1'}
     elif mode=='runtime':
-        label=LABEL; args=['/usr/bin/caffeinate','-s',executable,'-m','founder_jarvis.runtime']; env={'KELVIN_ENV_FILE':str(BASE/'runtime.env'),'PYTHONUNBUFFERED':'1','OLLAMA_HOST':'127.0.0.1:11434'}
+        label=LABEL; args=[executable,'-m','founder_jarvis.runtime']; env={'KELVIN_ENV_FILE':str(BASE/'runtime.env'),'PYTHONUNBUFFERED':'1','OLLAMA_HOST':'127.0.0.1:11434','KELVIN_AGENT_PYTHON':str(ROOT/'.venv/bin/python'),'KELVIN_SPEECH_PYTHON':str(BASE/'speech-venv/bin/python'),'KELVIN_INSTALL_STATUS':str(BASE/'install-status.txt'),'HOME':str(Path.home()),'JARVIS_ENGINE':'claude','JARVIS_MODEL':'default','KELVIN_CLAUDE_BIN':os.environ['KELVIN_CLAUDE_BIN'],'KELVIN_LOCAL_MODEL':'qwen2.5:3b'}
+        if not (BASE/'speech-venv/bin/python').is_file(): env['KELVIN_SPEECH_PYTHON']=str(ROOT/'.venv/bin/python')
     else: raise SystemExit('Unknown service')
     target=install_plist(label,plist(label,args,path,env=env))
     domain=f'gui/{os.getuid()}'
-    subprocess.run(['/bin/launchctl','bootout',f'{domain}/{label}'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-    subprocess.run(['/bin/launchctl','enable',f'{domain}/{label}'],check=True)
-    subprocess.run(['/bin/launchctl','bootstrap',domain,str(target)],check=True)
+    register(domain,label,target)
     print(f'Started {label}; inspect launchctl and logs for actual runtime status.')
+
+def register(domain,label,target):
+    ctl='/bin/launchctl'; job=f'{domain}/{label}'
+    def call(*args): return subprocess.run([ctl,*args],capture_output=True,text=True)
+    def loaded(): return call('print',job).returncode==0
+    # bootout is asynchronous; wait for the previous registration to disappear.
+    if loaded():
+        result=call('bootout',job)
+        for _ in range(30):
+            if not loaded(): break
+            time.sleep(1)
+        else: raise SystemExit(f'Old service still registered: {job}. {result.stderr}')
+    result=call('enable',job)
+    if result.returncode: raise SystemExit(result.stderr or 'launchctl enable failed')
+    for attempt in range(6):
+        result=call('bootstrap',domain,str(target))
+        if loaded():
+            result=call('kickstart',job)
+            if result.returncode: raise SystemExit(result.stderr or 'launchctl kickstart failed')
+            return
+        time.sleep(2)
+    raise SystemExit(f'LaunchAgent registration failed: {result.stderr}. Run launchctl print {domain} and inspect launchd logs. Do not use sudo.')
 
 if __name__=='__main__': main()

@@ -12,4 +12,4 @@ class MacTests(unittest.TestCase):
     def test_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'config.toml'; config_file(path,Path(tmp)); data=tomllib.loads(path.read_text())
-            self.assertIn('Your name is Kelvin',data['agent']['system_prompt'])
+            self.assertIn('Your name is Kelvin',data['agent']['default_system_prompt'])

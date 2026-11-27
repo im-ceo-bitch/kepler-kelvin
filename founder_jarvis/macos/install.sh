@@ -3,34 +3,21 @@ set -euo pipefail
 umask 077
 cd "$(dirname "$0")/../.."
 export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
-[[ "$(uname -s)" == Darwin ]] || { echo 'This installer requires macOS.'; exit 1; }
-[[ "$(id -u)" != 0 ]] || { echo 'Run as your normal Mac user, not sudo.'; exit 1; }
-major="$(sw_vers -productVersion | cut -d. -f1)"
-[[ "$major" -ge 14 ]] || { echo 'Ollama requires macOS 14 or newer.'; exit 1; }
-for cmd in uv ffmpeg git; do
-  command -v "$cmd" >/dev/null || { echo "Missing $cmd. Install uv and ffmpeg (brew install uv ffmpeg), and Xcode Command Line Tools (xcode-select --install) if needed."; exit 1; }
-done
-OLLAMA="$(command -v ollama || true)"
-if [[ -z "$OLLAMA" && -x /Applications/Ollama.app/Contents/Resources/ollama ]]; then OLLAMA=/Applications/Ollama.app/Contents/Resources/ollama; fi
-[[ -n "$OLLAMA" ]] || { echo 'Install Ollama for macOS from https://ollama.com/download/mac then rerun.'; exit 1; }
-# Stop on any failed dependency installation; do not enable a broken service.
-uv sync --python 3.11 --extra speech --no-dev
-uv pip install python-dotenv
-PY="$PWD/.venv/bin/python"
-"$PY" -m unittest founder_jarvis.test_runtime founder_jarvis.test_macos -v
-"$PY" -c 'import telegram, dotenv, faster_whisper, openjarvis'
+[[ "$(uname -s)" == Darwin && "$(id -u)" != 0 ]] || { echo 'Run on macOS as normal user, not sudo.'; exit 1; }
+BASE="$HOME/Library/Application Support/Kelvin"
+mkdir -p "$BASE"; chmod 700 "$BASE"
+stage() { printf '%s\n' "$1" > "$BASE/install-status.txt"; echo "Kelvin v3: $1"; }
+trap 'stage "Installation failed at line $LINENO; see terminal."' ERR
+export KELVIN_CLAUDE_BIN="$(command -v claude)"
+[[ -x "$KELVIN_CLAUDE_BIN" ]] || { echo 'Claude Code not found in PATH'; exit 1; }
+stage 'Preparing Telegram environment'
+uv venv --allow-existing --python 3.11 "$BASE/telegram-venv"
+PY="$BASE/telegram-venv/bin/python"
+uv pip install --python "$PY" 'python-telegram-bot==22.8' 'python-dotenv>=1,<2'
+"$PY" -m unittest founder_jarvis.test_runtime founder_jarvis.test_macos founder_jarvis.test_recovery founder_jarvis.test_claude -v
 "$PY" founder_jarvis/macos/service.py config "$PY"
-"$PY" founder_jarvis/macos/service.py ollama "$OLLAMA"
-for i in $(seq 1 45); do
-  if /usr/bin/curl -fsS --max-time 3 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then break; fi
-  sleep 2
-done
-/usr/bin/curl -fsS --max-time 5 http://127.0.0.1:11434/api/tags >/dev/null
-MODEL="$("$PY" -c 'from dotenv import dotenv_values; from pathlib import Path; print(dotenv_values(Path.home()/"Library/Application Support/Kelvin/runtime.env").get("JARVIS_MODEL","qwen2.5:3b"))')"
-OLLAMA_HOST=127.0.0.1:11434 "$OLLAMA" pull "$MODEL"
-# Real inference and speech round-trip before enabling the Telegram process.
-"$PY" -m founder_jarvis.macos.smoke
+stage 'Starting Telegram service with Claude Code'
 "$PY" founder_jarvis/macos/service.py runtime "$PY"
-echo 'Kelvin LaunchAgent installed. Send /start and /health to the bot, then test text and voice.'
-echo 'For AC idle sleep prevention, run: sudo pmset -c sleep 0 displaysleep 5'
-echo 'Leave the lid open, power connected, and your macOS user logged in.'
+stage 'Telegram service registered; verify Claude via Telegram /health and a text request'
+echo 'Existing local model and speech dependencies retained. No Ollama download required.'
+echo 'Keep Mac logged in, connected to AC, lid open; sudo pmset -c sleep 0 displaysleep 5'
