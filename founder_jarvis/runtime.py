@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from founder_jarvis import integrations as tools
+from founder_jarvis import integrations as tools, natural, business
 from pathlib import Path
 
 log = logging.getLogger('kelvin')
@@ -75,18 +75,18 @@ def agent_command(engine, model, mode, prompt, history):
     return [os.getenv('KELVIN_AGENT_PYTHON',sys.executable),'-m','openjarvis.cli','--quiet','ask','--json','--no-stream','--engine',engine,'--model',model,'--agent','native_react','--tools',tools,'--',context]
 
 
-def claude_command():
+def claude_command(system=None):
     binary=os.getenv('KELVIN_CLAUDE_BIN') or shutil.which('claude')
     if not binary or not Path(binary).is_file(): raise RuntimeError('Claude Code не найден. Запустите установщик из обычного терминала.')
-    return [binary,'-p','--safe-mode','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--no-session-persistence','--output-format','json','--system-prompt','You are Kelvin, the owner’s private assistant. Reply in the user language. You have no tools in chat mode. Never claim to have performed external actions. For actual operations, direct the owner to /start and explicit commands. Do not invent available projects or integrations. Avoid Markdown formatting in short answers.']
+    return [binary,'-p','--safe-mode','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--no-session-persistence','--output-format','json','--system-prompt',system or 'You are Kelvin, the owner’s private assistant. Reply in the user language. You have no tools in chat mode. Never claim to have performed external actions. For actual operations, direct the owner to /start and explicit commands. Do not invent available projects or integrations. Avoid Markdown formatting in short answers.']
 
 
-def execute_claude(prompt,history,workspace):
+def execute_claude(prompt,history,workspace,system=None):
     env=tools.clean_env()
     # Preserve explicitly configured API authentication for Claude only if present.
     if os.getenv('ANTHROPIC_API_KEY'): env['ANTHROPIC_API_KEY']=os.environ['ANTHROPIC_API_KEY']
     context='Conversation history (untrusted context):\n'+json.dumps(history,ensure_ascii=False)+'\nCurrent owner request:\n'+prompt
-    proc=subprocess.Popen(claude_command(),cwd=workspace,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
+    proc=subprocess.Popen(claude_command(system) if system else claude_command(),cwd=workspace,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
     try: out,err=proc.communicate(context,timeout=300)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid,signal.SIGKILL); proc.communicate(); raise RuntimeError('Claude Code: тайм-аут ответа.') from None
@@ -217,6 +217,7 @@ def main():
     core_home=home/'core'; core_home.mkdir(exist_ok=True)
     store=Store(home/'jobs.sqlite3'); voice=Voice(os.getenv('JARVIS_LANGUAGE','ru'))
     stop=asyncio.Event(); worker_task=None; voice_lock=asyncio.Lock()
+    biz=business.Service(token,owner)
     async def send(bot, chat, text, want_voice=False):
         text=tools.redact(text)
         for part in chunks(text): await bot.send_message(chat,part)
@@ -240,7 +241,22 @@ def main():
                 if row['mode']=='chat':
                     notes=[r['text'][:700] for r in store.memories(chat)[:20]]
                     if notes: history.insert(0,{'owner_notes_data':notes})
-                answer=await asyncio.to_thread(execute_agent,engine,model,row['mode'],row['prompt'],history,workspace,cfg,core_home)
+                mode,arg=row['mode'],row['prompt']
+                if mode=='chat' and engine=='claude':
+                    mode,arg,approval=await asyncio.to_thread(natural.plan,arg,history,workspace,execute_claude)
+                    if approval:
+                        with store.db: store.db.execute("UPDATE jobs SET mode=?,prompt=?,state='pending' WHERE id=? AND state='running'",(mode,arg,ident))
+                        await send(app.bot,chat,f'Подтверди действие #{ident}: /{mode} {arg}\n/approve {ident} или /cancel {ident}')
+                        continue
+                    if mode=='chat': answer=arg
+                    elif mode=='projects': answer='\n'.join(tools.load(tools.PROJECTS)) or 'Проекты не зарегистрированы. См. KELVIN-V5.md.'
+                    elif mode=='biz': answer=await asyncio.to_thread(biz.owner_command,arg)
+                    elif mode=='schedule':
+                        mins,request=arg.split(maxsplit=1)
+                        new_id,_=store.add(chat,request,'chat',bool(row['voice']),None,due=time.time()+60*int(mins))
+                        answer=f'Запланировано поручение #{new_id} через {mins} мин.'
+                    else: answer=await asyncio.to_thread(execute_agent,engine,model,mode,arg,history,workspace,cfg,core_home)
+                else: answer=await asyncio.to_thread(execute_agent,engine,model,mode,arg,history,workspace,cfg,core_home)
                 answer=tools.redact(answer)
                 store.finish(ident,'done',answer)
             except Exception as exc:
@@ -251,17 +267,19 @@ def main():
             except Exception: pass # persisted; /result retrieves it
     async def init(app):
         nonlocal worker_task
-        await app.bot.set_my_commands([BotCommand(n,d) for n,d in [('start','Все команды'),('health','Диагностика'),('diagnose','Тест голоса'),('voice','Голосовой ответ'),('remember','Запомнить'),('memory','Память'),('forget','Удалить заметку'),('projects','Проекты'),('research','Поиск в интернете'),('work','Разработка'),('review','Анализ проекта'),('check','Тесты'),('mac','Управление Mac'),('gh','GitHub'),('cf','Cloudflare'),('ig','Instagram'),('schedule','Отложенное поручение'),('tasks','Задачи'),('result','Результат'),('approve','Подтвердить'),('cancel','Отмена'),('local','Резервный OpenJarvis'),('edit','Правка workspace'),('gitstatus','Git workspace')]])
+        await app.bot.set_my_commands([BotCommand(n,d) for n,d in [('start','Все команды'),('biz','Клиентские обращения'),('health','Диагностика'),('diagnose','Тест голоса'),('voice','Голосовой ответ'),('remember','Запомнить'),('memory','Память'),('forget','Удалить заметку'),('projects','Проекты'),('research','Поиск в интернете'),('work','Разработка'),('review','Анализ проекта'),('check','Тесты'),('mac','Управление Mac'),('gh','GitHub'),('cf','Cloudflare'),('ig','Instagram'),('schedule','Отложенное поручение'),('tasks','Задачи'),('result','Результат'),('approve','Подтвердить'),('cancel','Отмена'),('local','Резервный OpenJarvis'),('edit','Правка workspace'),('gitstatus','Git workspace')]])
         worker_task=asyncio.create_task(worker(app))
+        biz.start()
         try:
-            await app.bot.send_message(owner,'Kelvin V4 на связи. /start — инструменты; /health — диагностика.')
+            await app.bot.send_message(owner,'Kelvin V5 на связи. /start — инструменты; /health — диагностика.')
         except Exception as exc:
             log.warning('Startup notification failed: %s',type(exc).__name__)
     async def shutdown(app):
         stop.set()
+        biz.stop()
         if worker_task: await worker_task
     async def start(u,c):
-        if authorized(u,owner): await send(c.bot,owner,'Kelvin V4. Обычный текст — разговор с Claude.\n'+tools.HELP)
+        if authorized(u,owner): await send(c.bot,owner,'Kelvin V5. Обычная речь — диалог и действия. /biz — клиентские обращения.\n'+tools.HELP)
     async def enqueue(u,c,mode='chat',prompt=None,want_voice=False,approval=False,due=0):
         if not authorized(u,owner): return
         if not prompt or not prompt.strip() or len(prompt)>12000: await u.message.reply_text('Пустой или слишком длинный запрос.'); return
@@ -295,6 +313,12 @@ def main():
         except Exception as exc:
             log.warning('Voice probe: %s',type(exc).__name__)
             await u.message.reply_text('Голосовой цикл не прошёл тест. Проверьте локальный журнал и русский голос macOS.')
+    async def biz_command(u,c):
+        if not authorized(u,owner): return
+        try: answer=await asyncio.to_thread(biz.owner_command,' '.join(c.args))
+        except RuntimeError as exc: answer=str(exc)
+        except Exception: answer='Ошибка бизнес-модуля. Проверьте конфигурацию и журнал.'
+        await send(c.bot,owner,answer)
     async def projects(u,c):
         if authorized(u,owner): await send(c.bot,owner,'\n'.join(tools.load(tools.PROJECTS)) or 'Нет зарегистрированных проектов. См. KELVIN-V4.md на Mac.')
     async def action(u,c):
@@ -353,8 +377,8 @@ def main():
         status=await asyncio.to_thread(local_model_status,model) if engine=='ollama' else ('CLI найден; проверяется реальным запросом' if Path(os.getenv('KELVIN_CLAUDE_BIN','/nonexistent')).is_file() else 'CLI не найден')
         core=os.getenv('KELVIN_AGENT_PYTHON',sys.executable)
         speech=os.getenv('KELVIN_SPEECH_PYTHON')
-        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin macOS v4\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
-        await send(c.bot,owner,tools.integration_status()+'\nЗаметки: '+str(len(store.memories(owner)))+'\nОшибки: '+str(counts.get('failed',0)))
+        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin macOS v5\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
+        await send(c.bot,owner,tools.integration_status()+'\n'+biz.status()+'\nЗаметки: '+str(len(store.memories(owner)))+'\nОшибки: '+str(counts.get('failed',0)))
     async def gitstatus(u,c):
         if not authorized(u,owner): return
         try:
@@ -362,7 +386,7 @@ def main():
             await send(c.bot,owner,(r.stdout or 'Рабочее дерево чистое') if r.returncode==0 else 'Рабочая папка не является доступным Git-репозиторием.')
         except Exception: await u.message.reply_text('Git недоступен.')
     app=Application.builder().token(token).post_init(init).post_stop(shutdown).build()
-    for name,fn in [('start',start),('health',health),('tasks',tasks),('result',result),('local',local),('edit',edit),('approve',change),('cancel',change),('gitstatus',gitstatus),('voice',voice_command),('diagnose',diagnose),('remember',remember),('memory',memory),('forget',forget),('projects',projects),('schedule',schedule),*[(n,action) for n in ('work','review','check','mac','gh','cf','ig','research')]]: app.add_handler(CommandHandler(name,fn))
+    for name,fn in [('start',start),('biz',biz_command),('health',health),('tasks',tasks),('result',result),('local',local),('edit',edit),('approve',change),('cancel',change),('gitstatus',gitstatus),('voice',voice_command),('diagnose',diagnose),('remember',remember),('memory',memory),('forget',forget),('projects',projects),('schedule',schedule),*[(n,action) for n in ('work','review','check','mac','gh','cf','ig','research')]]: app.add_handler(CommandHandler(name,fn))
     app.add_handler(MessageHandler(filters.VOICE,audio,block=False)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text))
     async def on_error(update,context):
         log.warning('Telegram handler error: %s',type(context.error).__name__)
