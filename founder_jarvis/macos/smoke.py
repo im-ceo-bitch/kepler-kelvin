@@ -1,7 +1,7 @@
 """Local acceptance checks without consuming Telegram messages."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import os
+import os, sys
 from dotenv import dotenv_values
 from founder_jarvis.runtime import config_file, execute_agent, Voice
 
@@ -13,12 +13,15 @@ def main():
     with TemporaryDirectory() as tmp:
         base=Path(tmp); work=base/'work'; work.mkdir(); home=base/'core'; home.mkdir()
         cfg=base/'agent.toml'; config_file(cfg,work)
-        reply=execute_agent('ollama',values.get('JARVIS_MODEL','qwen2.5:3b'),'chat','Ответь: сколько будет 7 умножить на 8?',[],work,cfg,home)
-        if '56' not in reply: raise SystemExit('Inference test failed; see model configuration.')
-        print('PASS: OpenJarvis + Ollama inference',flush=True)
-        v=Voice(values.get('JARVIS_LANGUAGE','ru'))
-        p=v.speak('Привет. Проверка голосового сообщения.',base)
-        if not v.transcribe(p).strip(): raise SystemExit('Speech test failed.')
-        print('PASS: local TTS and nonempty speech recognition',flush=True)
+        mode=sys.argv[1] if len(sys.argv)>1 else 'all'
+        if mode in ('all','model'):
+            reply=execute_agent('ollama',values.get('JARVIS_MODEL','qwen2.5:3b'),'chat','Ответь: сколько будет 7 умножить на 8?',[],work,cfg,home)
+            if '56' not in reply: raise SystemExit('Inference test failed; see model configuration.')
+            print('PASS: OpenJarvis + Ollama inference',flush=True)
+        if mode in ('all','voice'):
+            v=Voice(values.get('JARVIS_LANGUAGE','ru'))
+            p=v.speak('Привет. Проверка голосового сообщения.',base)
+            if not v.transcribe(p).strip(): raise SystemExit('Speech test failed.')
+            print('PASS: local TTS and nonempty speech recognition',flush=True)
 
 if __name__=='__main__': main()

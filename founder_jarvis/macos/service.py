@@ -45,7 +45,7 @@ def main():
     if mode=='ollama':
         label=OLLAMA; args=['/bin/bash',ROOT/'founder_jarvis/macos/ollama-service.sh',executable]; env={'OLLAMA_HOST':'127.0.0.1:11434','OLLAMA_NUM_PARALLEL':'1','OLLAMA_MAX_LOADED_MODELS':'1'}
     elif mode=='runtime':
-        label=LABEL; args=[executable,'-m','founder_jarvis.runtime']; env={'KELVIN_ENV_FILE':str(BASE/'runtime.env'),'PYTHONUNBUFFERED':'1','OLLAMA_HOST':'127.0.0.1:11434','KELVIN_AGENT_PYTHON':str(ROOT/'.venv/bin/python'),'KELVIN_SPEECH_PYTHON':str(BASE/'speech-venv/bin/python'),'KELVIN_INSTALL_STATUS':str(BASE/'install-status.txt'),'HOME':str(Path.home()),'JARVIS_ENGINE':'claude','JARVIS_MODEL':'default','KELVIN_CLAUDE_BIN':os.environ['KELVIN_CLAUDE_BIN'],'KELVIN_LOCAL_MODEL':'qwen2.5:3b'}
+        label=LABEL; args=['/usr/bin/caffeinate','-s',executable,'-m','founder_jarvis.runtime']; env={'KELVIN_ENV_FILE':str(BASE/'runtime.env'),'PYTHONUNBUFFERED':'1','OLLAMA_HOST':'127.0.0.1:11434','KELVIN_AGENT_PYTHON':str(ROOT/'.venv/bin/python'),'KELVIN_SPEECH_PYTHON':str(BASE/'speech-venv/bin/python'),'KELVIN_INSTALL_STATUS':str(BASE/'install-status.txt'),'HOME':str(Path.home()),'JARVIS_ENGINE':'claude','JARVIS_MODEL':'default','KELVIN_CLAUDE_BIN':os.environ['KELVIN_CLAUDE_BIN'],'KELVIN_LOCAL_MODEL':'qwen2.5:3b'}
         if not (BASE/'speech-venv/bin/python').is_file(): env['KELVIN_SPEECH_PYTHON']=str(ROOT/'.venv/bin/python')
     else: raise SystemExit('Unknown service')
     target=install_plist(label,plist(label,args,path,env=env))

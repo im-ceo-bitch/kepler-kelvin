@@ -12,6 +12,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+from founder_jarvis import integrations as tools
 from pathlib import Path
 
 log = logging.getLogger('kelvin')
@@ -25,10 +27,19 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.executescript('''CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY, chat INTEGER NOT NULL, prompt TEXT NOT NULL, mode TEXT NOT NULL, voice INTEGER NOT NULL, state TEXT NOT NULL, answer TEXT, message_id INTEGER, UNIQUE(chat,message_id));
         UPDATE jobs SET state='interrupted' WHERE state='running';''')
+        cols={r[1] for r in self.db.execute('PRAGMA table_info(jobs)')}
+        if 'due' not in cols: self.db.execute('ALTER TABLE jobs ADD COLUMN due REAL NOT NULL DEFAULT 0')
+        self.db.execute('CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY, chat INTEGER NOT NULL, text TEXT NOT NULL)')
         self.db.commit()
-    def add(self, chat, prompt, mode, voice, message_id):
+    def remember(self, chat, text):
+        with self.db: return self.db.execute('INSERT INTO memory(chat,text) VALUES(?,?)',(chat,text)).lastrowid
+    def memories(self, chat):
+        return self.db.execute('SELECT id,text FROM memory WHERE chat=? ORDER BY id DESC LIMIT 50',(chat,)).fetchall()
+    def forget(self, chat, ident):
+        with self.db: return bool(self.db.execute('DELETE FROM memory WHERE chat=? AND id=?',(chat,ident)).rowcount)
+    def add(self, chat, prompt, mode, voice, message_id, approval=False, due=0):
         with self.db:
-            cur = self.db.execute('INSERT OR IGNORE INTO jobs(chat,prompt,mode,voice,state,message_id) VALUES(?,?,?,?,?,?)',(chat,prompt,mode,int(voice),'pending' if mode=='edit' else 'queued',message_id))
+            cur = self.db.execute('INSERT OR IGNORE INTO jobs(chat,prompt,mode,voice,state,message_id,due) VALUES(?,?,?,?,?,?,?)',(chat,prompt,mode,int(voice),'pending' if approval or mode=='edit' else 'queued',message_id,due))
             if cur.rowcount: return cur.lastrowid, True
             return self.db.execute('SELECT id FROM jobs WHERE chat=? AND message_id=?',(chat,message_id)).fetchone()[0], False
     def transition(self, ident, chat, old, new):
@@ -36,16 +47,17 @@ class Store:
             return self.db.execute('UPDATE jobs SET state=? WHERE id=? AND chat=? AND state=?',(new,ident,chat,old)).rowcount==1
     def next(self):
         with self.db:
-            row=self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            row=self.db.execute("SELECT * FROM jobs WHERE state='queued' AND due<=? ORDER BY id LIMIT 1",(time.time(),)).fetchone()
             if row: self.db.execute("UPDATE jobs SET state='running' WHERE id=?",(row['id'],))
             return row
     def finish(self, ident, state, answer):
         with self.db: self.db.execute('UPDATE jobs SET state=?,answer=? WHERE id=? AND state=\'running\'',(state,answer,ident))
     def recent(self, chat):
         return self.db.execute('SELECT id,state,mode,prompt,answer FROM jobs WHERE chat=? ORDER BY id DESC LIMIT 10',(chat,)).fetchall()
-    def history(self, chat):
-        rows=self.db.execute("SELECT prompt,answer FROM jobs WHERE chat=? AND state='done' ORDER BY id DESC LIMIT 6",(chat,)).fetchall()
-        return [{'user':r['prompt'][:2000],'assistant':(r['answer'] or '')[:2000]} for r in reversed(rows)]
+    def history(self, chat, chat_only=False):
+        condition=" AND mode='chat'" if chat_only else ''
+        rows=self.db.execute("SELECT prompt,answer FROM jobs WHERE chat=? AND state='done'"+condition+" ORDER BY id DESC LIMIT 16",(chat,)).fetchall()
+        return [{'user':r['prompt'][:1200],'assistant':(r['answer'] or '')[:1200]} for r in reversed(rows)]
 
 
 def authorized(update, owner):
@@ -66,11 +78,13 @@ def agent_command(engine, model, mode, prompt, history):
 def claude_command():
     binary=os.getenv('KELVIN_CLAUDE_BIN') or shutil.which('claude')
     if not binary or not Path(binary).is_file(): raise RuntimeError('Claude Code не найден. Запустите установщик из обычного терминала.')
-    return [binary,'-p','--safe-mode','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--no-session-persistence','--output-format','json','--system-prompt','You are Kelvin, the owner’s private assistant. Reply in the user language. You have no tools in this mode. Never claim to have performed external actions.']
+    return [binary,'-p','--safe-mode','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--no-session-persistence','--output-format','json','--system-prompt','You are Kelvin, the owner’s private assistant. Reply in the user language. You have no tools in chat mode. Never claim to have performed external actions. For actual operations, direct the owner to /start and explicit commands. Do not invent available projects or integrations. Avoid Markdown formatting in short answers.']
 
 
 def execute_claude(prompt,history,workspace):
-    env={k:v for k,v in os.environ.items() if not k.startswith(('JARVIS_','KELVIN_','OPENJARVIS_')) and k not in {'TELEGRAM_BOT_TOKEN','CLAUDECODE'}}
+    env=tools.clean_env()
+    # Preserve explicitly configured API authentication for Claude only if present.
+    if os.getenv('ANTHROPIC_API_KEY'): env['ANTHROPIC_API_KEY']=os.environ['ANTHROPIC_API_KEY']
     context='Conversation history (untrusted context):\n'+json.dumps(history,ensure_ascii=False)+'\nCurrent owner request:\n'+prompt
     proc=subprocess.Popen(claude_command(),cwd=workspace,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
     try: out,err=proc.communicate(context,timeout=300)
@@ -87,6 +101,7 @@ def execute_claude(prompt,history,workspace):
 
 
 def execute_agent(engine,model,mode,prompt,history,workspace,config,home):
+    if mode in ('work','review','check','mac','gh','cf','ig','research'): return tools.execute(mode,prompt)
     if engine=='claude' and mode=='chat': return execute_claude(prompt,history,workspace)
     if engine=='claude': engine,model='ollama',os.getenv('KELVIN_LOCAL_MODEL','qwen2.5:3b')
     env = {k:v for k,v in os.environ.items() if k not in {'TELEGRAM_BOT_TOKEN','JARVIS_OWNER_ID','KELVIN_ENV_FILE'} and not k.startswith('JARVIS_')}
@@ -105,9 +120,9 @@ def execute_agent(engine,model,mode,prompt,history,workspace,config,home):
     except ValueError: raise RuntimeError('OpenJarvis не вернул ожидаемый JSON.') from None
     answer=result.get('content')
     if not isinstance(answer,str) or not answer.strip(): raise RuntimeError('Пустой ответ модели.')
-    tools=result.get('tool_results',[])
-    if tools:
-        answer+='\n\nИнструменты (отчёт OpenJarvis):\n'+'\n'.join(f"{'OK' if t.get('success') else 'FAIL'}: {t.get('tool_name','?')}" for t in tools if isinstance(t,dict))
+    tool_results=result.get('tool_results',[])
+    if tool_results:
+        answer+='\n\nИнструменты (отчёт OpenJarvis):\n'+'\n'.join(f"{'OK' if t.get('success') else 'FAIL'}: {t.get('tool_name','?')}" for t in tool_results if isinstance(t,dict))
     return answer
 
 
@@ -119,7 +134,8 @@ class Voice:
         speech_python=os.getenv('KELVIN_SPEECH_PYTHON')
         if speech_python:
             if not Path(speech_python).is_file(): raise RuntimeError('Speech engine not installed')
-            env={k:v for k,v in os.environ.items() if k not in {'TELEGRAM_BOT_TOKEN','JARVIS_OWNER_ID','KELVIN_ENV_FILE','KELVIN_SPEECH_PYTHON'}}
+            env=tools.clean_env()
+            if os.getenv('JARVIS_WHISPER_MODEL'): env['JARVIS_WHISPER_MODEL']=os.environ['JARVIS_WHISPER_MODEL']
             result=subprocess.run([speech_python,str(Path(__file__).with_name('speech_worker.py')),str(path),self.language],env=env,capture_output=True,text=True,timeout=300,check=True)
             return json.loads(result.stdout)['text']
         if self.model is None:
@@ -202,6 +218,7 @@ def main():
     store=Store(home/'jobs.sqlite3'); voice=Voice(os.getenv('JARVIS_LANGUAGE','ru'))
     stop=asyncio.Event(); worker_task=None; voice_lock=asyncio.Lock()
     async def send(bot, chat, text, want_voice=False):
+        text=tools.redact(text)
         for part in chunks(text): await bot.send_message(chat,part)
         if want_voice:
             try:
@@ -216,34 +233,86 @@ def main():
                 await asyncio.sleep(0.5); continue
             ident,chat=row['id'],row['chat']
             try:
-                try: await app.bot.send_message(chat,f'Задача #{ident}: выполняю.')
-                except Exception: pass
-                answer=await asyncio.to_thread(execute_agent,engine,model,row['mode'],row['prompt'],store.history(chat),workspace,cfg,core_home)
+                if row['mode']!='chat':
+                    try: await app.bot.send_message(chat,f'Задача #{ident}: выполняю.')
+                    except Exception: pass
+                history=store.history(chat,chat_only=True)
+                if row['mode']=='chat':
+                    notes=[r['text'][:700] for r in store.memories(chat)[:20]]
+                    if notes: history.insert(0,{'owner_notes_data':notes})
+                answer=await asyncio.to_thread(execute_agent,engine,model,row['mode'],row['prompt'],history,workspace,cfg,core_home)
+                answer=tools.redact(answer)
                 store.finish(ident,'done',answer)
             except Exception as exc:
                 answer=str(exc) if isinstance(exc,RuntimeError) else 'Ошибка выполнения. Проверьте локальный runtime.'
                 store.finish(ident,'failed',answer)
-            try: await send(app.bot,chat,f'#{ident}\n{answer}',bool(row['voice']))
+            if row['mode']=='chat': answer=re.sub(r'\*\*([^*]+)\*\*',r'\1',answer)
+            try: await send(app.bot,chat,answer if row['mode']=='chat' else f'#{ident}\n{answer}',bool(row['voice']))
             except Exception: pass # persisted; /result retrieves it
     async def init(app):
         nonlocal worker_task
-        await app.bot.set_my_commands([BotCommand('start','Помощь'),BotCommand('health','Состояние Kelvin'),BotCommand('tasks','Задачи'),BotCommand('result','Результат по ID'),BotCommand('local','Локальный агент OpenJarvis'),BotCommand('edit','Запросить изменение файлов'),BotCommand('approve','Подтвердить изменение'),BotCommand('cancel','Отменить ожидающую задачу'),BotCommand('gitstatus','Состояние локального Git')])
+        await app.bot.set_my_commands([BotCommand(n,d) for n,d in [('start','Все команды'),('health','Диагностика'),('diagnose','Тест голоса'),('voice','Голосовой ответ'),('remember','Запомнить'),('memory','Память'),('forget','Удалить заметку'),('projects','Проекты'),('research','Поиск в интернете'),('work','Разработка'),('review','Анализ проекта'),('check','Тесты'),('mac','Управление Mac'),('gh','GitHub'),('cf','Cloudflare'),('ig','Instagram'),('schedule','Отложенное поручение'),('tasks','Задачи'),('result','Результат'),('approve','Подтвердить'),('cancel','Отмена'),('local','Резервный OpenJarvis'),('edit','Правка workspace'),('gitstatus','Git workspace')]])
         worker_task=asyncio.create_task(worker(app))
         try:
-            await app.bot.send_message(owner,'Kelvin: Telegram-сервис запущен. /health — проверка локальной модели и установки.')
+            await app.bot.send_message(owner,'Kelvin V4 на связи. /start — инструменты; /health — диагностика.')
         except Exception as exc:
             log.warning('Startup notification failed: %s',type(exc).__name__)
     async def shutdown(app):
         stop.set()
         if worker_task: await worker_task
     async def start(u,c):
-        if authorized(u,owner): await u.message.reply_text('Kelvin на связи. Текст и голос: основной интеллект. /local запрос — локальный OpenJarvis; /edit запрос — локальное изменение файлов после /approve ID. /tasks, /result ID, /cancel ID. Доступ к shell и публикациям отключён.')
-    async def enqueue(u,c,mode='chat',prompt=None,want_voice=False):
+        if authorized(u,owner): await send(c.bot,owner,'Kelvin V4. Обычный текст — разговор с Claude.\n'+tools.HELP)
+    async def enqueue(u,c,mode='chat',prompt=None,want_voice=False,approval=False,due=0):
         if not authorized(u,owner): return
         if not prompt or not prompt.strip() or len(prompt)>12000: await u.message.reply_text('Пустой или слишком длинный запрос.'); return
-        ident,fresh=store.add(owner,prompt.strip(),mode,want_voice,u.message.message_id)
-        if fresh: await u.message.reply_text(f'#{ident}: '+(f'ожидает подтверждения /approve {ident}' if mode=='edit' else 'в очереди'))
+        ident,fresh=store.add(owner,prompt.strip(),mode,want_voice,u.message.message_id,approval,due)
+        if fresh and (approval or mode!='chat' or due):
+            await u.message.reply_text(f'#{ident}: '+(f'ожидает /approve {ident}\n{mode}: {prompt[:1000]}' if approval or mode=='edit' else 'запланировано' if due else 'в очереди'))
     async def text(u,c): await enqueue(u,c,prompt=u.message.text)
+    async def voice_command(u,c): await enqueue(u,c,prompt=' '.join(c.args),want_voice=True)
+    async def remember(u,c):
+        if not authorized(u,owner): return
+        text=' '.join(c.args).strip()
+        if not text or len(text)>2000: await u.message.reply_text('/remember текст (до 2000 символов)'); return
+        if tools.redact(text)!=text: await u.message.reply_text('Не сохраняйте токены в памяти.'); return
+        ident=store.remember(owner,text); await u.message.reply_text(f'Заметка #{ident} сохранена локально.')
+    async def memory(u,c):
+        if authorized(u,owner): await send(c.bot,owner,'\n'.join(f"#{r['id']} {r['text']}" for r in store.memories(owner)) or 'Нет заметок.')
+    async def forget(u,c):
+        if not authorized(u,owner): return
+        if len(c.args)!=1 or not c.args[0].isdigit(): await u.message.reply_text('/forget ID'); return
+        await u.message.reply_text('Заметка удалена (история поручений не затронута).' if store.forget(owner,int(c.args[0])) else 'Заметка не найдена.')
+    async def diagnose(u,c):
+        if not authorized(u,owner): return
+        await u.message.reply_text('Проверяю голосовой цикл локально. Claude проверяется командой /voice Привет.')
+        def probe():
+            with tempfile.TemporaryDirectory() as d:
+                p=voice.speak('Привет, это проверка Kelvin.',Path(d))
+                return voice.transcribe(p)
+        try:
+            async with voice_lock: recognized=await asyncio.to_thread(probe)
+            await u.message.reply_text('TTS + STT: '+recognized if recognized else 'TTS создан, но речь не распознана.')
+        except Exception as exc:
+            log.warning('Voice probe: %s',type(exc).__name__)
+            await u.message.reply_text('Голосовой цикл не прошёл тест. Проверьте локальный журнал и русский голос macOS.')
+    async def projects(u,c):
+        if authorized(u,owner): await send(c.bot,owner,'\n'.join(tools.load(tools.PROJECTS)) or 'Нет зарегистрированных проектов. См. KELVIN-V4.md на Mac.')
+    async def action(u,c):
+        if not authorized(u,owner): return
+        mode=u.message.text.split()[0].split('@')[0][1:]; prompt=' '.join(c.args)
+        try: _,_,approval=tools.parse(mode,prompt)
+        except (ValueError,RuntimeError) as exc: await u.message.reply_text(str(exc)); return
+        await enqueue(u,c,mode,prompt,approval=approval)
+    async def schedule(u,c):
+        if not authorized(u,owner): return
+        if len(c.args)<2 or not c.args[0].isdigit() or not 1<=int(c.args[0])<=43200: await u.message.reply_text('/schedule минуты запрос (1–43200)'); return
+        prompt=' '.join(c.args[1:]); mode='chat'
+        if prompt.startswith('/'):
+            fields=prompt.split(maxsplit=1); mode=fields[0][1:]; prompt=fields[1] if len(fields)>1 else ''
+            try: _,_,approval=tools.parse(mode,prompt)
+            except (ValueError,RuntimeError) as exc: await u.message.reply_text(str(exc)); return
+            if approval: await u.message.reply_text('Отложенные изменения запрещены; запустите действие отдельно с подтверждением.'); return
+        await enqueue(u,c,mode=mode,prompt=prompt,due=time.time()+60*int(c.args[0]))
     async def local(u,c): await enqueue(u,c,mode='local',prompt=' '.join(c.args))
     async def edit(u,c): await enqueue(u,c,mode='edit',prompt=' '.join(c.args))
     async def audio(u,c):
@@ -256,7 +325,14 @@ def main():
                 async with voice_lock:
                     prompt=await asyncio.to_thread(voice.transcribe,p)
             if not prompt: await u.message.reply_text('Речь не распознана.'); return
-            await enqueue(u,c,prompt=prompt,want_voice=True)
+            # Voice actions require a deliberately spoken command prefix; approval is always typed.
+            m=re.match(r'^команда\s+(work|review|check|mac|gh|cf|ig|research)\s+(.+)$',prompt.strip(),re.I|re.S)
+            if m:
+                mode,arg=m.group(1).lower(),m.group(2).strip()
+                try: _,_,approval=tools.parse(mode,arg)
+                except (ValueError,RuntimeError): await u.message.reply_text('Не удалось разобрать голосовую команду. Используйте текстовую команду из /start.'); return
+                await enqueue(u,c,mode,arg,want_voice=True,approval=approval)
+            else: await enqueue(u,c,prompt=prompt,want_voice=True)
         except Exception: await u.message.reply_text('Не удалось распознать голос. Проверьте faster-whisper и загрузку модели.')
     async def tasks(u,c):
         if authorized(u,owner): await u.message.reply_text('\n'.join(f"#{r['id']} {r['state']} · {r['prompt'][:90]}" for r in store.recent(owner)) or 'Задач пока нет.')
@@ -277,7 +353,8 @@ def main():
         status=await asyncio.to_thread(local_model_status,model) if engine=='ollama' else ('CLI найден; проверяется реальным запросом' if Path(os.getenv('KELVIN_CLAUDE_BIN','/nonexistent')).is_file() else 'CLI не найден')
         core=os.getenv('KELVIN_AGENT_PYTHON',sys.executable)
         speech=os.getenv('KELVIN_SPEECH_PYTHON')
-        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin macOS v3\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
+        await u.message.reply_text(f'Kelvin на связи.\nВерсия: Kelvin macOS v4\nМодель: {engine}/{model} — {status}\nOpenJarvis Python: {"найден" if Path(core).is_file() else "не найден"}\nРечь: {"Python найден" if speech and Path(speech).is_file() else "не проверена"}\nУстановка: {install_status()}\nОчередь: {counts.get("queued",0)}\nВ работе: {counts.get("running",0)}\nЗавершено: {counts.get("done",0)}\nПрервано: {counts.get("interrupted",0)}\nДоступ: только владелец. Модель проверяется реальным запросом.')
+        await send(c.bot,owner,tools.integration_status()+'\nЗаметки: '+str(len(store.memories(owner)))+'\nОшибки: '+str(counts.get('failed',0)))
     async def gitstatus(u,c):
         if not authorized(u,owner): return
         try:
@@ -285,7 +362,7 @@ def main():
             await send(c.bot,owner,(r.stdout or 'Рабочее дерево чистое') if r.returncode==0 else 'Рабочая папка не является доступным Git-репозиторием.')
         except Exception: await u.message.reply_text('Git недоступен.')
     app=Application.builder().token(token).post_init(init).post_stop(shutdown).build()
-    for name,fn in [('start',start),('health',health),('tasks',tasks),('result',result),('local',local),('edit',edit),('approve',change),('cancel',change),('gitstatus',gitstatus)]: app.add_handler(CommandHandler(name,fn))
+    for name,fn in [('start',start),('health',health),('tasks',tasks),('result',result),('local',local),('edit',edit),('approve',change),('cancel',change),('gitstatus',gitstatus),('voice',voice_command),('diagnose',diagnose),('remember',remember),('memory',memory),('forget',forget),('projects',projects),('schedule',schedule),*[(n,action) for n in ('work','review','check','mac','gh','cf','ig','research')]]: app.add_handler(CommandHandler(name,fn))
     app.add_handler(MessageHandler(filters.VOICE,audio,block=False)); app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text))
     async def on_error(update,context):
         log.warning('Telegram handler error: %s',type(context.error).__name__)
