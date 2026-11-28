@@ -85,5 +85,8 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(fake.finished);stop.set()
         with self.assertLogs('kelvin.shared',level='WARNING') as logs:
             await asyncio.wait_for(b.loop(fake,stop,lambda p,h:'Сапфир.\n\n[Локальный резерв: Claude временно недоступен; ответ требует проверки.]',notify,lambda:[],asyncio.Lock()),3)
-        self.assertIn('Foundation receipt '+ident+' done '+hashlib.sha256('сапфир'.encode()).hexdigest(),' '.join(logs.output))
+        digest=hashlib.sha256('сапфир'.encode()).hexdigest()
+        from founder_jarvis.operations import redact_log
+        receipt='Foundation receipt '+ident+' done '+digest[:32]+':'+digest[32:]
+        self.assertIn(receipt,redact_log(' '.join(logs.output)))
         self.assertNotIn('Сапфир',' '.join(logs.output))

@@ -36,6 +36,12 @@ def _invoke(prompt,history,workspace,operation="answer",cancel=None):
             except (ValueError,AttributeError): limited=False
             if limited:raise RuntimeError('Claude временно недоступен: лимит запросов (HTTP 429). Профессиональные задачи не передаются локальной модели.')
         import logging
+        if p.returncode==76:
+            try: code=json.loads(out).get('error')
+            except (ValueError,AttributeError): code=None
+            if code in ('LOCAL_TIMEOUT','LOCAL_UNREACHABLE','LOCAL_HTTP_ERROR','LOCAL_EMPTY','LOCAL_ERROR','LOCAL_AGENT_ERROR'):
+                logging.getLogger('kelvin.advisor').warning('Ollama reserve failed: %s',code)
+                raise RuntimeError('Локальный резерв недоступен: '+code+'. Claude ограничен. Запрос не завершён.')
         logging.getLogger('kelvin.advisor').warning('Native agent exit %s',p.returncode)
         raise RuntimeError('OpenJarvis Orchestrator завершился с ошибкой. Проверь локальный журнал /health.')
     try: return json.loads(out)

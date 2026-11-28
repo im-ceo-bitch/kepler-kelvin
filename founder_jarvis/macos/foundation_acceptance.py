@@ -33,8 +33,9 @@ def receipts(logfile,ident):
         # Bounded read; the service uses rotating logs.
         with path.open('rb') as f:
             f.seek(max(0,path.stat().st_size-2_500_000));data=f.read().decode('utf8',errors='replace')
-        for match in re.finditer(r'Foundation receipt ('+re.escape(ident)+r'-[12]) (done|failed) ([0-9a-f]{64})',data):
-            found[match[1]]=dict(status=match[2],sha256=match[3])
+        for match in re.finditer(r'Foundation receipt ('+re.escape(ident)+r'-[12]) (done|failed) ([0-9a-f]{32}:?[0-9a-f]{32})(?: (LOCAL_TIMEOUT|LOCAL_UNREACHABLE|LOCAL_HTTP_ERROR|LOCAL_EMPTY|LOCAL_ERROR|LOCAL_AGENT_ERROR|429|NONE|OTHER))?',data):
+            found[match[1]]=dict(status=match[2],sha256=match[3].replace(':',''))
+            if match[4]:found[match[1]]['failure_code']=match[4]
     return found
 
 
@@ -57,7 +58,8 @@ def live_probe(bridge,logfile,timeout=240):
             time.sleep(2)
         else:result=None
         ok=bool(result and result['status']=='done' and result['sha256']==expected)
-        checks.append({'turn':index,'finish_and_telegram_ack':bool(result),'correct_answer':ok})
+        checks.append({'turn':index,'finish_and_telegram_ack':bool(result),'status':result['status'] if result else 'no_receipt','correct_answer':ok})
+        if result and result.get('failure_code') not in (None,'NONE'):checks[-1]['failure_code']=result['failure_code']
         if not ok:break
     after=bridge.call('diagnostics')
     return {'protocol':after.get('protocol'),'before':before.get('queue'),'after':after.get('queue'),'turns':checks,'passed':len(checks)==2 and all(c['correct_answer'] for c in checks),'scope':'Owner queue -> model -> finish -> Telegram send acknowledgement. Incoming Telegram update requires owner message.'}

@@ -22,6 +22,6 @@ class FoundationAcceptance(unittest.TestCase):
             class Bridge:
                 def call(self,*args):return {'protocol':7,'queue':{}}
                 def enqueue(self,key,*args):
-                    with p.open('a') as f:f.write(f'Foundation receipt {key} done {hash_}\n')
+                    with p.open('a') as f:f.write(f'Foundation receipt {key} done {hash_[:32]}:{hash_[32:]}\n')
             with patch('secrets.choice',return_value=word):result=live_probe(Bridge(),p)
             self.assertTrue(result['passed']);self.assertEqual(len(result['turns']),2)

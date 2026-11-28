@@ -1,0 +1,7 @@
+# Block 01 live acceptance hotfix
+
+Observed in owner's screenshot: queue claim and model start succeeded, native agent exited 1 after ~128 seconds, backend saved failed, then Telegram send acknowledgement was logged. The log formatter redacted the full 64-character receipt digest, making the former acceptance parser unable to recognize the receipt. The exact native exception was not available.
+
+Fixes: keep Claude primary and permit Ollama only on structured 429 and the existing narrow dialogue allowlist. Give the reserve a short context with at most one prior short answer when recall is needed, 1024 context tokens and 64 generation tokens, no tools, 180-second local timeout; preserve the upstream agent for primary inference and normalize local final-answer transport. Surface allowlisted reserve failure codes without raw exceptions or credentials. Encode synthetic receipt digest in two 32-character halves so the regular log secret filter remains unchanged; accept old and new receipt formats. Report actual failed status and safe failure codes.
+
+Validation: 173 local Python unittest cases passed using archived Kelvin core plus latest installed patch and archived upstream source. Tests include mocked Ollama/Claude, timeout classification, scoped context, receipt redaction and parser. This is not a live Mac or production model test. Real inference and final Telegram acceptance remain open; the likely long-context/timeout issue is not yet confirmed. No backend or customer data changes. No Codex dependency.
