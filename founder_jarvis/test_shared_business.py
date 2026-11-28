@@ -42,3 +42,32 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(fake.data['answer'],'Ответ');self.assertTrue(voice);self.assertIn('finish',calls);stop.set()
         await asyncio.wait_for(b.loop(fake,stop,lambda p,h:'Ответ',notify,lambda:[],asyncio.Lock()),3)
         self.assertEqual(fake.data['status'],'done')
+
+class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_answer_saved_as_failure(self):
+        stop=asyncio.Event()
+        class Fake:
+            def call(self,action,data=None):
+                if action=='claim':return {'job':{'id':'test-id','source':'telegram','voice':False,'lease':'test','prompt':'Привет'},'history':[],'typedMemory':[],'snapshot':{}}
+                if action=='finish':self.result=data
+                return {'ok':True}
+        fake=Fake()
+        async def notify(answer,voice):stop.set()
+        with self.assertLogs('kelvin.shared',level='WARNING') as logs:
+            await asyncio.wait_for(b.loop(fake,stop,lambda p,h:'  ',notify,lambda:[],asyncio.Lock()),3)
+        self.assertEqual(fake.result['status'],'failed')
+        self.assertTrue(fake.result['answer'].strip())
+        self.assertTrue(any('Queue job failed at model' in line for line in logs.output))
+    async def test_claim_error_logged_without_secret(self):
+        stop=asyncio.Event()
+        class Fake:
+            def call(self,action,data=None):
+                if action=='claim':raise RuntimeError('HTTP 503 UNAVAILABLE secret-that-must-not-be-logged')
+                return {'ok':True}
+        async def notify(*args):pass
+        with self.assertLogs('kelvin.shared',level='WARNING') as logs:
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(b.loop(Fake(),stop,lambda p,h:'ok',notify,lambda:[],asyncio.Lock()),.1)
+        output=' '.join(logs.output)
+        self.assertIn('Queue loop failed at claim: 503 UNAVAILABLE',output)
+        self.assertNotIn('secret-that-must-not-be-logged',output)
