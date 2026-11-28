@@ -130,7 +130,11 @@ def reserve_allowed(intent, topics=()):
     # The acceptance probe is owner-scoped and has no operational intent.
     if re.fullmatch(r'ответь только словом [а-яёa-z]{4,24}\.?',text):return True
     if text in {'какое слово было в предыдущем ответе? ответь тем же словом.', 'какое слово было в предыдущем ответе?'}:return True
-    return bool(re.fullmatch(r'(?:привет(?:,? kelvin)?|здравствуй(?:те)?|салом|salom|hello|hi|как дела|ты (?:тут|здесь|на связи)|спасибо|рахмат|rahmat|доброе утро|добрый вечер)[.!? ]*',text))
+    # Accept a greeting followed by a short social/status question, not arbitrary suffixes.
+    greeting=r'(?:привет|здравствуй(?:те)?|салом|salom|hello|hi|доброе утро|добрый вечер)(?:[, ]+(?:kelvin|келвин))?'
+    question=r'(?:как дела|как ты|как ты работаешь|ты (?:тут|здесь|на связи|работаешь)|how are you|qalaysan|qandaysan)'
+    social=rf'(?:{greeting}(?:[,!.? ]+{question})?|{question}|спасибо|рахмат|rahmat)'
+    return bool(re.fullmatch(social+r'[.!? ]*',text))
 
 def answer(prompt,history,workspace,completion=execute_claude,search=None):
     tool=MarketSearch(search);engine,model=provider_engine(workspace,completion)

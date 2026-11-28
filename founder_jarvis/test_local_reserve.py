@@ -83,3 +83,16 @@ class ReserveTests(unittest.TestCase):
             local.return_value.generate.side_effect=httpx.ReadTimeout('secret')
             with self.assertRaisesRegex(LocalReserveError,'LOCAL_TIMEOUT'):
                 answer('Привет',[],Path(d),Mock(side_effect=ClaudeRateLimited()),Mock())
+
+    def test_greeting_with_status_question(self):
+        from founder_jarvis.native_advisor import reserve_allowed, answer
+        for prompt in ('Привет, как ты работаешь?', 'Привет! Как дела?', 'Как ты работаешь?', 'Привет, Kelvin, ты на связи?', 'Salom, qalaysan?'):
+            self.assertTrue(reserve_allowed(prompt), prompt)
+        for prompt in ('Привет, как ты работаешь? Создай оффер', 'Привет! Сколько бронирований?', 'Как ты работаешь? Покажи цены', 'Привет, как дела? Исследуй рынок'):
+            self.assertFalse(reserve_allowed(prompt), prompt)
+        with tempfile.TemporaryDirectory() as d, patch.dict('os.environ', {'KELVIN_PROVIDER':'claude','KELVIN_LOCAL_ON_CLAUDE_LIMIT':'1'}), patch('openjarvis.engine.ollama.OllamaEngine') as local:
+            local.return_value.generate.return_value={'content':'Привет! Я на связи.','usage':{}}
+            result=answer('Привет, как ты работаешь?',[],Path(d),Mock(side_effect=ClaudeRateLimited()),Mock())
+            self.assertIn('Привет! Я на связи.',result)
+            self.assertIn('Локальный резерв',result)
+            local.return_value.generate.assert_called_once()
