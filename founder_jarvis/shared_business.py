@@ -32,7 +32,7 @@ class Bridge:
         except (OSError, ValueError, KeyError, TypeError): raise RuntimeError('Повреждён ключ связи iumrah; повторите подключение.') from None
     def call(self, action, data=None):
         if action not in {'message','claim','finish','heartbeat','remember','memory','forget','records','autonomy','care','diagnostics'}: raise ValueError('Unknown action')
-        req=urllib.request.Request(ORIGIN+'/api/internal/kelvin/'+action,method='POST',data=json.dumps(data or {},ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json','Accept':'application/json'})
+        req=urllib.request.Request(ORIGIN+'/api/internal/kelvin/'+action,method='POST',data=json.dumps(data or {},ensure_ascii=False).encode(),headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json','Accept':'application/json','User-Agent':'Kelvin/7 (+https://iumrah.app)'})
         try:
             with self.opener.open(req,timeout=20) as res:
                 raw=res.read(16_000_001)

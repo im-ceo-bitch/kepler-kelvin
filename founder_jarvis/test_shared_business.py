@@ -13,6 +13,14 @@ class BridgeTests(unittest.TestCase):
         op=Opener();bridge=b.Bridge('a'*64,op);bridge.enqueue('id-123456','привет',True)
         req=op.requests[0];self.assertEqual(req.full_url,b.ORIGIN+'/api/internal/kelvin/message');self.assertEqual(req.get_header('Authorization'),'Bearer '+'a'*64);self.assertEqual(json.loads(req.data)['voice'],True)
         with self.assertRaises(ValueError):bridge.call('https://wrong')
+    def test_descriptive_user_agent_on_all_bridge_actions(self):
+        op=Opener();bridge=b.Bridge('a'*64,op)
+        for action in ('message','claim','finish','heartbeat','remember','memory','forget','records','autonomy','care','diagnostics'):
+            bridge.call(action)
+        self.assertEqual(len(op.requests),11)
+        for req in op.requests:
+            self.assertEqual(req.get_header('User-agent'),'Kelvin/7 (+https://iumrah.app)')
+            self.assertEqual(req.get_header('Authorization'),'Bearer '+'a'*64)
     def test_daily_deterministic_and_no_before_eight(self):
         op=Opener();bridge=b.Bridge('a'*64,op);bridge.daily(dt.datetime(2026,11,27,7));self.assertFalse(op.requests)
         bridge.daily(dt.datetime(2026,11,27,8));bridge.daily(dt.datetime(2026,11,27,19));self.assertEqual(json.loads(op.requests[0].data),json.loads(op.requests[1].data))
