@@ -93,6 +93,10 @@ def claude_command(system=None):
     return [binary,'-p','--safe-mode','--tools','','--disallowedTools','mcp__*','--strict-mcp-config','--no-session-persistence','--output-format','json','--system-prompt',system or 'You are Kelvin, the owner’s private assistant. Reply in the user language. You have no tools in chat mode. Never claim to have performed external actions. For actual operations, direct the owner to /start and explicit commands. Do not invent available projects or integrations. Avoid Markdown formatting in short answers.']
 
 
+class ClaudeRateLimited(RuntimeError):
+    """The CLI returned a structured HTTP 429 for this request."""
+
+
 def execute_claude(prompt,history,workspace,system=None):
     env=tools.clean_env()
     # Preserve explicitly configured API authentication for Claude only if present.
@@ -105,11 +109,18 @@ def execute_claude(prompt,history,workspace,system=None):
         if own_group:os.killpg(proc.pid,signal.SIGKILL)
         else:proc.kill()
         proc.communicate(); raise RuntimeError('Claude Code: тайм-аут ответа.') from None
+    try:
+        envelope = json.loads(out)
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict) and envelope.get('is_error') is True and envelope.get('api_error_status') == 429:
+        raise ClaudeRateLimited('Claude временно ограничил запросы (HTTP 429).')
     if proc.returncode:
         log.warning('Claude Code exit %s',proc.returncode)
         raise RuntimeError(f'Claude Code завершился с кодом {proc.returncode}. Проверьте локальный журнал и авторизацию Claude.')
-    try: result=json.loads(out)
-    except ValueError: raise RuntimeError('Claude Code вернул неверный формат ответа.') from None
+    result = envelope
+    if result is None:
+        raise RuntimeError('Claude Code вернул неверный формат ответа.')
     if not isinstance(result,dict) or result.get('is_error') or not isinstance(result.get('result'),str) or not result['result'].strip():
         raise RuntimeError('Claude Code не вернул ответ. Проверьте лимиты и авторизацию.')
     return result['result'].strip()

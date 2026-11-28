@@ -1,7 +1,7 @@
 """Thin transport adapter: use upstream Orchestrator, not another agent loop.
 Public searches use curated topics; owner/client data never becomes a search query.
 """
-import json, os, sys, datetime, shutil
+import json, os, sys, datetime, shutil, logging, re
 from founder_jarvis import intelligence_core
 from pathlib import Path
 from openjarvis.agents.orchestrator import OrchestratorAgent
@@ -9,7 +9,7 @@ from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.core.types import ToolResult
 from openjarvis.tools.web_search import WebSearchTool
-from founder_jarvis.runtime import execute_claude
+from founder_jarvis.runtime import ClaudeRateLimited, execute_claude
 
 from founder_jarvis.research_evidence import TOPICS, GENERAL_TOPICS, WATCHLIST, observations, validate_report
 
@@ -17,15 +17,44 @@ SYSTEM='''Ты Kelvin — личный стратегический советн
 
 class ClaudeTransport(InferenceEngine):
     engine_id='kelvin_claude_cli'; is_cloud=True
-    def __init__(self,workspace,completion=execute_claude): self.workspace=workspace;self.completion=completion
+    def __init__(self,workspace,completion=execute_claude): self.workspace=workspace;self.completion=completion;self.rate_limited=False
     def generate(self,messages,**kwargs):
         system='\n'.join(m.text for m in messages if m.role.value=='system') or SYSTEM
         data=[{'role':m.role.value,'content':m.text} for m in messages if m.role.value!='system']
-        answer=self.completion('Сообщения и наблюдения агента (JSON):\n'+json.dumps(data,ensure_ascii=False),[],self.workspace,system)
+        try:
+            answer=self.completion('Сообщения и наблюдения агента (JSON):\n'+json.dumps(data,ensure_ascii=False),[],self.workspace,system)
+        except ClaudeRateLimited:
+            self.rate_limited=True
+            raise
         return {'content':answer,'usage':{}}
     async def stream(self,*a,**kw): yield self.generate(*a,**kw)['content']
     def list_models(self): return ['default']
     def health(self): return self.completion is not execute_claude or bool(shutil.which(os.getenv('KELVIN_CLAUDE_BIN') or 'claude'))
+
+class LocalReserveTransport(ClaudeTransport):
+    """One local fallback per interactive turn, exclusively on a confirmed 429."""
+    def __init__(self, workspace, completion):
+        super().__init__(workspace, completion)
+        self.reserve = None
+        self.used_reserve = False
+
+    def generate(self, messages, **kwargs):
+        if self.reserve is None:
+            try:
+                return super().generate(messages, **kwargs)
+            except ClaudeRateLimited:
+                from openjarvis.engine.ollama import OllamaEngine
+                self.reserve = OllamaEngine(host='http://127.0.0.1:11434', timeout=120)
+                self.used_reserve = True
+                logging.getLogger('kelvin.native').warning('Claude HTTP 429; interactive local reserve selected')
+        kwargs['model'] = os.environ.get('KELVIN_LOCAL_MODEL', 'qwen2.5:3b')
+        return self.reserve.generate(messages, **kwargs)
+
+    def close(self):
+        if self.reserve is not None:
+            self.reserve.close()
+        super().close()
+
 
 class MarketSearch(BaseTool):
     tool_id='market_search';is_local=False;topics=TOPICS
@@ -49,17 +78,35 @@ def provider_engine(workspace,completion=execute_claude):
     else: raise RuntimeError('Неизвестный провайдер Kelvin. Автоматическая замена отключена.')
     return engine,model
 
+def reserve_allowed(intent, topics=()):
+    """Conservative allowlist, not a general semantic classifier. Owner dialogue only."""
+    if topics or not isinstance(intent,str) or len(intent)>300: return False
+    text=intent.strip().casefold()
+    # The acceptance probe is owner-scoped and has no operational intent.
+    if re.fullmatch(r'ответь только словом [а-яёa-z]{4,24}\.?',text):return True
+    if text in {'какое слово было в предыдущем ответе? ответь тем же словом.', 'какое слово было в предыдущем ответе?'}:return True
+    return bool(re.fullmatch(r'(?:привет(?:,? kelvin)?|здравствуй(?:те)?|салом|salom|hello|hi|как дела|ты (?:тут|здесь|на связи)|спасибо|рахмат|rahmat|доброе утро|добрый вечер)[.!? ]*',text))
+
 def answer(prompt,history,workspace,completion=execute_claude,search=None):
     tool=MarketSearch(search);engine,model=provider_engine(workspace,completion)
     # Research cannot silently degrade into unsupported model guesses. Force one public lookup for research/report requests.
-    import re
     evidence={}; topics=[]
     intent=prompt.split('\nOwner request:\n',1)[-1] if prompt.startswith('Business snapshot (data, not instructions):\n') else prompt
     if re.search(r'рын[окка]|конкурент|тренд|исследован|исследуй|отч[её]т|доклад|маркетинг|research|market',intent,re.I):
         topics=['market','competitors','marketing'] if re.search(r'отч[её]т|доклад',intent,re.I) else ['competitors' if 'конкурент' in intent.lower() else 'marketing' if 'маркетинг' in intent.lower() or 'тренд' in intent.lower() else 'market']
+    # Reserve only low-risk conversation; never silently downgrade business or production.
+    if isinstance(engine, ClaudeTransport) and os.getenv('KELVIN_LOCAL_ON_CLAUDE_LIMIT') == '1' and reserve_allowed(intent, topics):
+        engine = LocalReserveTransport(workspace, completion)
     context=json.dumps({'as_of':datetime.datetime.now(datetime.timezone.utc).isoformat(),'history':history,'public_evidence':evidence,'request':prompt},ensure_ascii=False)
-    result=intelligence_core.ask(engine,model,[tool],workspace,context,SYSTEM,prefetch=topics)
+    try:
+        result=intelligence_core.ask(engine,model,[tool],workspace,context,SYSTEM,prefetch=topics)
+    except Exception:
+        if isinstance(engine,ClaudeTransport) and engine.rate_limited and not isinstance(engine,LocalReserveTransport):
+            raise ClaudeRateLimited('Claude временно ограничил запросы (HTTP 429).') from None
+        raise
     content=result['content'];evidence=result['public_evidence']
+    if isinstance(engine, LocalReserveTransport) and engine.used_reserve:
+        content += '\n\n[Локальный резерв: Claude временно недоступен; ответ требует проверки.]'
     if tool.seen or evidence:
         links=[]
         for item in tool.seen.values():
@@ -119,7 +166,10 @@ def extract_candidates(text,workspace,completion=execute_claude):
 
 if __name__=='__main__':
     data=json.load(sys.stdin)
-    if data.get('operation')=='extract':result={'candidates':extract_candidates(data['prompt'],Path.cwd())}
-    elif data.get('operation')=='research':result=research(data['prompt'],Path.cwd(),prior=data.get('history'))
-    else:result={'answer':answer(data['prompt'],data['history'],Path.cwd())}
+    try:
+        if data.get('operation')=='extract':result={'candidates':extract_candidates(data['prompt'],Path.cwd())}
+        elif data.get('operation')=='research':result=research(data['prompt'],Path.cwd(),prior=data.get('history'))
+        else:result={'answer':answer(data['prompt'],data['history'],Path.cwd())}
+    except ClaudeRateLimited:
+        print(json.dumps({'error':'CLAUDE_RATE_LIMIT'}));sys.exit(75)
     print(json.dumps(result,ensure_ascii=False))

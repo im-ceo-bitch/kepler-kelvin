@@ -1,0 +1,23 @@
+{
+  "files": {
+    "content_factory/review.py": "d84b7d54b6bc9d5dc8daafca8380a472dd8cdbbfdd8dc0352a58deb3389c42a9",
+    "content_factory/test_review.py": "075f636b7f3c0b3bda1e79fe003e292fe3a66313d390d2c4d57fff61f35e16ad",
+    "content_factory/render_reference.sh": "a206bba77d75257253eb1d642276d5defd91bc46f37e42d0b6627a1534c167da",
+    "content_factory/check_queue.py": "8e67a39f50a82d21a24df296b120ed4421d45258c4054288cb148e4e96eb12a3",
+    "content_factory/index_assets.py": "7db1079cc9d4b5dee479dbd8529ca31382a9abacd90d68f49cf3634f337d1e29",
+    "content_factory/test_review_v2.py": "4cb7a55aa26e060eeb30cf54ba26c506c87517530f4f273d199c4c2db35d61ef",
+    "content_factory/review_v2.py": "38849f9498c8bc71ac8bb36c6ce3dea9f452628dd03f1da475f7b41c3f07cb4f",
+    "founder_jarvis/test_local_reserve.py": "98b96ef27e728e674f5306bc49545148485059bbb16bede77c088069fbcba015",
+    "founder_jarvis/runtime.py": "5d4bcb7b71e2e340a309b93a7b80da89426bac8894dc4192ce9a189fa7dbd1b7",
+    "founder_jarvis/native_advisor.py": "714a96dd1520d1620a14c04dcc8725c378dec62b9503f5f687cf7c33815043e9",
+    "founder_jarvis/test_shared_business.py": "e127bc648f719aae8e242886943873df3cb64fc560799365394e72ff629fe38d",
+    "founder_jarvis/test_foundation_acceptance.py": "c7ce9b4899a879fd8cdee8146554ea0163aa4cf11e5ab523447f45c7f3ab0a04",
+    "founder_jarvis/shared_business.py": "7734d0cc728eb04ea121fc6f6753b957415320c5c1e9de4888dee0017be8350f",
+    "founder_jarvis/advisor.py": "3c9cab35eefca4733526db0244f6f08185c95ec2ead4e8241d936addda5230b0",
+    "founder_jarvis/macos/foundation_acceptance.py": "724bbbe96182adb5a7b9693ae20a7574e158e8fe27610bef80a0da00560b71df",
+    "docs/content-factory/reports/BLOCK_01_FINAL_NO_CODEX.md": "da697b5f944202ff93724b3163d7d7edabaacc51b7e7faaa87dd0857e92978d7",
+    "docs/content-factory/evidence/block01-final-test-summary.json": "0bc066039375279362d7da6eb4fc9667d8b1f04be708c7fff291044dfa5f4b90",
+    "docs/content-factory/evidence/Kelvin_Block_01_FEM.mp4": "a69fd4bc894ab171e26f39d32a324c81b450c7119e3c170543b25358fedb4c67",
+    "docs/content-factory/compatibility/business-protocol7-candidate.patch": "e0b5245e0b4ce8cb64748a6b39855b06e764d90a1273aae803e2aa8d6553bd85"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "kelvin": {
+    "tests": 171,
+    "passed": 171,
+    "mode": "local unittest; mocked model transport"
+  },
+  "quality": {
+    "tests": 10,
+    "passed": 10
+  },
+  "business_archived_v7_candidate": {
+    "tests": 51,
+    "passed": 51
+  },
+  "loopback_http": "pass",
+  "original_fem": {
+    "sha256": "a69fd4bc894ab171e26f39d32a324c81b450c7119e3c170543b25358fedb4c67",
+    "decode": "pass",
+    "width": 1080,
+    "height": 1920,
+    "duration": 3,
+    "audio": false
+  },
+  "live_mac": "not tested",
+  "business_latest_head": "not supplied",
+  "codex_runtime": "excluded"
+}

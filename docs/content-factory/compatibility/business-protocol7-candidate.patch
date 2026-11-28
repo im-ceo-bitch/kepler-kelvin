@@ -1,0 +1,55 @@
+diff --git a/Backend/HotelsWorker/src/kelvin.js b/Backend/HotelsWorker/src/kelvin.js
+index df34404..d53509f 100644
+--- a/Backend/HotelsWorker/src/kelvin.js
++++ b/Backend/HotelsWorker/src/kelvin.js
+@@ -78,7 +78,7 @@ export async function kelvinAdmin(request,env,user,session){
+  if(path==='/revoke'&&request.method==='POST'){await db.prepare('DELETE FROM kelvin_links WHERE owner=?').bind(owner).run();return json({ok:true});}
+  if(path==='/history'&&request.method==='GET'){
+   const link=await db.prepare('SELECT last_seen FROM kelvin_links WHERE owner=?').bind(owner).first();
+-  return json({ok:true,paired:!!link,online:!!link&&now()-link.last_seen<45000,turns:await history(db,owner)});
++  return json({ok:true,protocol:7,paired:!!link,online:!!link&&now()-link.last_seen<45000,turns:await history(db,owner)});
+  }
+  if(path==='/turn'&&request.method==='POST'){
+   const input=await body(request),id=input?.id;
+@@ -135,10 +135,17 @@ export async function kelvinInternal(request,env){
+   const lease=secret();
+   const job=await db.prepare(`UPDATE kelvin_turns SET status='running',lease=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE seq=(SELECT seq FROM kelvin_turns WHERE owner=? AND (status='queued' OR (status='running' AND lease_until<=?)) AND attempts<3 ORDER BY seq LIMIT 1) AND NOT EXISTS(SELECT 1 FROM kelvin_turns WHERE owner=? AND status='running' AND lease_until>?) AND EXISTS(SELECT 1 FROM kelvin_links WHERE owner=? AND token_hash=?) RETURNING *`).bind(lease,t+900000,t,owner,t,owner,t,owner,tokenHash).first();
+   if(!job)return json({ok:true,job:null});
+-  const typed=await memoryContext(db,owner);
+-  const context=(await rows(db.prepare("SELECT * FROM kelvin_turns WHERE owner=? AND seq<? AND seq>? AND status='done' ORDER BY seq DESC LIMIT 40").bind(owner,job.seq,typed.cutoff))).reverse().map(view);
+-  const memory=typed.records.filter(r=>r.trust==='owner').slice(0,50).map(({id,content})=>({id,content}));
+-  return json({ok:true,job:{...view(job),lease,voice:!!job.voice},history:context,memory,typedMemory:typed.records,insights:await insightRows(db,owner,3),snapshot:needsBusinessSnapshot(job.prompt)?await snapshot(env,job.prompt):{asOf:new Date(t).toISOString(),coverage:'Business data not requested for small talk or memory operation.',data:{}}});
++  try {
++   const typed=await memoryContext(db,owner);
++   const context=(await rows(db.prepare("SELECT * FROM kelvin_turns WHERE owner=? AND seq<? AND seq>? AND status='done' ORDER BY seq DESC LIMIT 40").bind(owner,job.seq,typed.cutoff))).reverse().map(view);
++   const memory=typed.records.filter(r=>r.trust==='owner').slice(0,50).map(({id,content})=>({id,content}));
++   return json({ok:true,job:{...view(job),lease,voice:!!job.voice},history:context,memory,typedMemory:typed.records,insights:await insightRows(db,owner,3),snapshot:needsBusinessSnapshot(job.prompt)?await snapshot(env,job.prompt):{asOf:new Date(t).toISOString(),coverage:'Business data not requested for small talk or memory operation.',data:{}}});
++  } catch {
++   // Context assembly failed after claim. Release only this authenticated lease.
++   // Never leave a job running for 15 minutes due to a pre-model failure.
++   await db.prepare("UPDATE kelvin_turns SET status=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,answer=CASE WHEN attempts>=3 THEN 'Не удалось подготовить контекст Kelvin. Отправьте новый запрос.' ELSE NULL END,lease=NULL,lease_until=0,updated_at=? WHERE owner=? AND request_id=? AND lease=? AND status='running' AND EXISTS(SELECT 1 FROM kelvin_links WHERE owner=? AND token_hash=?)").bind(now(),owner,job.request_id,lease,owner,tokenHash).run();
++   return fail('CONTEXT_UNAVAILABLE',503);
++  }
+  }
+  if(path==='/finish'){
+   const b=await body(request);if(!b||typeof b.id!=='string'||typeof b.lease!=='string'||typeof b.answer!=='string'||!b.answer.trim()||b.answer.length>30000||!['done','failed'].includes(b.status))return fail('INVALID_REQUEST',400);
+diff --git a/Backend/IumrahBackend/tests/kelvin.test.mjs b/Backend/IumrahBackend/tests/kelvin.test.mjs
+index 6a6c7e5..34282db 100644
+--- a/Backend/IumrahBackend/tests/kelvin.test.mjs
++++ b/Backend/IumrahBackend/tests/kelvin.test.mjs
+@@ -141,3 +141,15 @@ test('merged native voice and protocol 7 coexist in the same authenticated owner
+  assert.equal((await(await app(env,'insights')).json()).insights.length,1);
+  assert.equal((await(await app(env,'speech')).json()).configured,true);
+ });
++
++test('foundation: history advertises actual v7 protocol',async()=>{
++ const env={HOTELS_DB:db()};await paired(env);const h=await(await app(env,'history')).json();assert.equal(h.protocol,7);
++});
++test('foundation: context failure releases claimed lease and bounds attempts',async()=>{
++ const env={HOTELS_DB:db()},token=await paired(env);await app(env,'message',{id:'foundation-context-001',prompt:'Привет'});
++ const base=env.HOTELS_DB.prepare;env.HOTELS_DB.prepare=(q,...args)=>{if(q.includes('SELECT COALESCE(MAX(cutoff_seq)'))throw Error('fixture context unavailable');return base(q,...args);};
++ for(let i=1;i<=3;i++){
++  const response=await mac(env,'claim',{},token);assert.equal(response.status,503);const r=env.HOTELS_DB.sql.prepare('SELECT status,attempts,lease,lease_until FROM kelvin_turns WHERE request_id=?').get('foundation-context-001');assert.equal(r.status,i===3?'failed':'queued');assert.equal(r.attempts,i);assert.equal(r.lease,null);assert.equal(r.lease_until,0);
++ }
++ env.HOTELS_DB.prepare=base;await app(env,'message',{id:'foundation-context-002',prompt:'Привет'});assert.equal((await(await mac(env,'claim',{},token)).json()).job.id,'foundation-context-002');
++});

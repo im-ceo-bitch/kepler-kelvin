@@ -71,3 +71,19 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         output=' '.join(logs.output)
         self.assertIn('Queue loop failed at claim: 503 UNAVAILABLE',output)
         self.assertNotIn('secret-that-must-not-be-logged',output)
+
+    async def test_foundation_receipt_only_after_delivery(self):
+        import hashlib
+        stop=asyncio.Event(); ident='foundation-probe-'+'a'*24+'-1'
+        class Fake:
+            def call(self,action,data=None):
+                if action=='claim': return {'job':{'id':ident,'source':'telegram','voice':False,'lease':'test','prompt':'Привет'},'history':[],'memory':[],'typedMemory':[],'snapshot':{}}
+                if action=='finish':self.finished=True
+                return {'ok':True}
+        fake=Fake()
+        async def notify(answer,voice):
+            self.assertTrue(fake.finished);stop.set()
+        with self.assertLogs('kelvin.shared',level='WARNING') as logs:
+            await asyncio.wait_for(b.loop(fake,stop,lambda p,h:'Сапфир.\n\n[Локальный резерв: Claude временно недоступен; ответ требует проверки.]',notify,lambda:[],asyncio.Lock()),3)
+        self.assertIn('Foundation receipt '+ident+' done '+hashlib.sha256('сапфир'.encode()).hexdigest(),' '.join(logs.output))
+        self.assertNotIn('Сапфир',' '.join(logs.output))

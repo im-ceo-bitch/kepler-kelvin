@@ -11,6 +11,8 @@ def _invoke(prompt,history,workspace,operation="answer",cancel=None):
     binary=os.getenv('KELVIN_AGENT_PYTHON',str(ROOT/'.venv/bin/python'))
     if not Path(binary).is_file(): raise RuntimeError('OpenJarvis Python отсутствует. Запусти установщик Kelvin.')
     env=tools.clean_env(); env.update(KELVIN_CHILD_PROCESS_GROUP='1',PYTHONPATH=os.pathsep.join([str(ROOT/'src'),str(ROOT)]),KELVIN_CLAUDE_BIN=os.getenv('KELVIN_CLAUDE_BIN',''),OPENJARVIS_HOME=str(Path(workspace)/'.advisor'),KELVIN_PROVIDER=os.getenv('KELVIN_PROVIDER','claude'),KELVIN_LOCAL_MODEL=os.getenv('KELVIN_LOCAL_MODEL','qwen2.5:3b'),KELVIN_PERSONA_ROOT=os.getenv('KELVIN_PERSONA_ROOT',str(Path.home()/'.openjarvis'/'personas'/'kelvin')))
+    if operation == 'answer' and os.getenv('KELVIN_LOCAL_ON_CLAUDE_LIMIT') == '1':
+        env['KELVIN_LOCAL_ON_CLAUDE_LIMIT'] = '1'
     if os.getenv('ANTHROPIC_API_KEY'):
         if operation=='research' and os.getenv('KELVIN_ALLOW_PAID_BACKGROUND','0')!='1':raise RuntimeError('Платные фоновые запросы не разрешены')
         env['ANTHROPIC_API_KEY']=os.environ['ANTHROPIC_API_KEY']
@@ -29,6 +31,10 @@ def _invoke(prompt,history,workspace,operation="answer",cancel=None):
         except ProcessLookupError:pass
         p.communicate();raise RuntimeError('Тайм-аут или остановка OpenJarvis. Повтори запрос позже.') from None
     if p.returncode:
+        if p.returncode==75:
+            try: limited=json.loads(out).get('error')=='CLAUDE_RATE_LIMIT'
+            except (ValueError,AttributeError): limited=False
+            if limited:raise RuntimeError('Claude временно недоступен: лимит запросов (HTTP 429). Профессиональные задачи не передаются локальной модели.')
         import logging
         logging.getLogger('kelvin.advisor').warning('Native agent exit %s',p.returncode)
         raise RuntimeError('OpenJarvis Orchestrator завершился с ошибкой. Проверь локальный журнал /health.')

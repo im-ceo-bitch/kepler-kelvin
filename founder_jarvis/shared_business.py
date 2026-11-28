@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import logging
 import time
+import hashlib
 import os
 import re
 import subprocess
@@ -163,9 +164,15 @@ async def loop(bridge, stop, respond, notify, local_notes, model_lock, thinking=
                             log.warning('Queue result saved: %s',status)
                             stage = 'end-thinking'
                             await end_thinking()
-                            if job['source'] in ('telegram','briefing'): delivery=(answer,bool(job.get('voice')))
+                            if job['source'] in ('telegram','briefing'): delivery=(answer,bool(job.get('voice')),job['id'],status)
                 if delivery:
-                    try: await notify(*delivery)
+                    answer,voice,ident,status=delivery
+                    try:
+                        await notify(answer,voice)
+                        if re.fullmatch(r'foundation-probe-[a-f0-9]{24}-[12]',ident):
+                            # No answer, prompt or secret written to this receipt.
+                            normalized=answer.split('\n\n[Локальный резерв:',1)[0].strip().casefold().strip(' .!?')
+                            log.warning('Foundation receipt %s %s %s',ident,status,hashlib.sha256(normalized.encode()).hexdigest())
                     except Exception as exc: log.warning('Queue notification failed: %s',error_code(exc))
                 if not job: await asyncio.sleep(6)
             except asyncio.CancelledError:raise
